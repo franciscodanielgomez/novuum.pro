@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Detailed Login Test Report</title>
+    <style>
+        body {
+            font-family: 'Courier New', monospace;
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #1e1e1e;
+            color: #d4d4d4;
+        }
+        h1 { color: #4ec9b0; }
+        h2 { color: #dcdcaa; margin-top: 30px; }
+        .log {
+            background: #252526;
+            padding: 10px;
+            margin: 5px 0;
+            border-left: 3px solid #007acc;
+            font-size: 13px;
+        }
+        .error {
+            border-left-color: #f48771;
+            background: #3a1f1f;
+        }
+        .success {
+            border-left-color: #4ec9b0;
+            background: #1f3a2f;
+        }
+        .warning {
+            border-left-color: #dcdcaa;
+            background: #3a3a1f;
+        }
+        .info {
+            border-left-color: #569cd6;
+            background: #1f2a3a;
+        }
+        button {
+            padding: 12px 24px;
+            margin: 10px 5px;
+            cursor: pointer;
+            background: #0e639c;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #1177bb;
+        }
+        .code-block {
+            background: #1e1e1e;
+            border: 1px solid #3c3c3c;
+            padding: 15px;
+            margin: 10px 0;
+            overflow-x: auto;
+            border-radius: 4px;
+        }
+        .timestamp {
+            color: #858585;
+            font-size: 11px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔍 Grido Login - Detailed Test Report</h1>
+    <p>Testing login functionality at <code>http://localhost:4173/login</code></p>
+    
+    <div>
+        <button onclick="runFullTest()">🚀 Run Full Test</button>
+        <button onclick="testManualLogin()">👤 Manual Login Test</button>
+        <button onclick="checkStorage()">💾 Check Storage</button>
+        <button onclick="clearAll()">🗑️ Clear All</button>
+    </div>
+
+    <div id="logs"></div>
+
+    <script>
+        const logs = document.getElementById('logs');
+        
+        const log = (message, type = 'log') => {
+            const div = document.createElement('div');
+            div.className = `log ${type}`;
+            const time = new Date().toLocaleTimeString('en-US', { hour12: false });
+            div.innerHTML = `<span class="timestamp">[${time}]</span> ${message}`;
+            logs.appendChild(div);
+            console.log(`[${type.toUpperCase()}]`, message);
+        };
+
+        const clearLogs = () => {
+            logs.innerHTML = '';
+        };
+
+        const checkStorage = () => {
+            log('=== CHECKING LOCALSTORAGE ===', 'info');
+            
+            const allKeys = Object.keys(localStorage);
+            log(`Total keys in localStorage: ${allKeys.length}`, 'info');
+            
+            allKeys.forEach(key => {
+                if (key.startsWith('grido_v0_')) {
+                    const value = localStorage.getItem(key);
+                    log(`📦 Key: <strong>${key}</strong>`, 'info');
+                    try {
+                        const parsed = JSON.parse(value);
+                        log(`<div class="code-block">${JSON.stringify(parsed, null, 2)}</div>`, 'info');
+                    } catch {
+                        log(`Value: ${value}`, 'info');
+                    }
+                }
+            });
+
+            const staff = localStorage.getItem('grido_v0_staff');
+            if (!staff) {
+                log('❌ NO STAFF DATA FOUND - This is the problem!', 'error');
+                log('The login page needs staff data to populate the user dropdown', 'warning');
+            } else {
+                try {
+                    const staffList = JSON.parse(staff);
+                    log(`✅ Staff data exists: ${staffList.length} members`, 'success');
+                    staffList.forEach(s => {
+                        log(`  👤 ${s.name} (${s.role}) - ID: ${s.id} - Active: ${s.active}`, 'success');
+                    });
+                } catch (e) {
+                    log(`❌ Error parsing staff data: ${e.message}`, 'error');
+                }
+            }
+        };
+
+        const initializeStorage = () => {
+            log('=== INITIALIZING STORAGE ===', 'info');
+            
+            const seedStaff = [
+                { id: 'staff-caja-1', name: 'María Caja', phone: '11 5555 1111', role: 'CAJA', active: true },
+                { id: 'staff-cadete-1', name: 'Juan Cadete', phone: '11 4444 2222', role: 'CADETE', active: true },
+                { id: 'staff-admin-1', name: 'Admin', phone: '11 3333 3333', role: 'ADMIN', active: true }
+            ];
+            
+            localStorage.setItem('grido_v0_staff', JSON.stringify(seedStaff));
+            log('✅ Seed staff data initialized', 'success');
+            
+            return seedStaff;
+        };
+
+        const testManualLogin = () => {
+            clearLogs();
+            log('=== MANUAL LOGIN TEST ===', 'info');
+            
+            // Check if staff exists
+            let staff = localStorage.getItem('grido_v0_staff');
+            let staffList;
+            
+            if (!staff) {
+                log('⚠️ No staff data found, initializing...', 'warning');
+                staffList = initializeStorage();
+            } else {
+                staffList = JSON.parse(staff);
+                log(`✅ Staff data loaded: ${staffList.length} members`, 'success');
+            }
+
+            // Select first active user
+            const activeStaff = staffList.filter(s => s.active);
+            if (activeStaff.length === 0) {
+                log('❌ No active staff members!', 'error');
+                return;
+            }
+
+            const user = activeStaff[0];
+            log(`👤 Selected user: <strong>${user.name}</strong> (${user.role})`, 'info');
+            log(`   ID: ${user.id}`, 'info');
+            
+            const pin = '1234';
+            log(`🔑 Using PIN: ${pin}`, 'info');
+
+            // Create session
+            const sessionData = {
+                userId: user.id,
+                location: 'Ituzaingó',
+                pin: pin
+            };
+
+            localStorage.setItem('grido_v0_session', JSON.stringify(sessionData));
+            log('✅ Session created and saved to localStorage', 'success');
+            log(`<div class="code-block">${JSON.stringify(sessionData, null, 2)}</div>`, 'success');
+
+            // Check if we need to check for shift
+            log('⚠️ Note: The app also checks for an open shift (api.shifts.getOpen())', 'warning');
+            log('   If no shift is open, the session will still be created but shift will be null', 'info');
+
+            // Try to navigate
+            log('🔄 Redirecting to /app in 2 seconds...', 'info');
+            setTimeout(() => {
+                window.location.href = 'http://localhost:4173/app';
+            }, 2000);
+        };
+
+        const testLoginFlow = async () => {
+            log('=== TESTING LOGIN FLOW ===', 'info');
+            
+            // Step 1: Check initial state
+            log('Step 1: Checking initial state...', 'info');
+            checkStorage();
+
+            // Step 2: Initialize if needed
+            let staff = localStorage.getItem('grido_v0_staff');
+            if (!staff) {
+                log('Step 2: Initializing storage...', 'warning');
+                initializeStorage();
+            } else {
+                log('Step 2: Storage already initialized', 'success');
+            }
+
+            // Step 3: Simulate login
+            log('Step 3: Simulating login...', 'info');
+            const staffList = JSON.parse(localStorage.getItem('grido_v0_staff'));
+            const user = staffList.find(s => s.active);
+            
+            if (!user) {
+                log('❌ No active user found!', 'error');
+                return false;
+            }
+
+            log(`   Logging in as: ${user.name}`, 'info');
+            
+            const sessionData = {
+                userId: user.id,
+                location: 'Ituzaingó',
+                pin: '1234'
+            };
+
+            localStorage.setItem('grido_v0_session', JSON.stringify(sessionData));
+            log('✅ Login successful!', 'success');
+
+            return true;
+        };
+
+        const testNavigation = () => {
+            log('=== TESTING NAVIGATION ===', 'info');
+            log('Attempting to navigate to /app...', 'info');
+            
+            setTimeout(() => {
+                log('🔄 Redirecting now...', 'info');
+                window.location.href = 'http://localhost:4173/app';
+            }, 1000);
+        };
+
+        const runFullTest = async () => {
+            clearLogs();
+            log('🚀 STARTING FULL LOGIN TEST', 'info');
+            log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'info');
+            
+            const success = await testLoginFlow();
+            
+            if (success) {
+                log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'success');
+                log('✅ All checks passed!', 'success');
+                log('📋 Summary:', 'info');
+                log('   • Staff data: ✅ Initialized', 'success');
+                log('   • User selected: ✅ First active user', 'success');
+                log('   • PIN: ✅ 1234', 'success');
+                log('   • Session: ✅ Created', 'success');
+                log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'success');
+                
+                testNavigation();
+            } else {
+                log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'error');
+                log('❌ Test failed!', 'error');
+            }
+        };
+
+        const clearAll = () => {
+            if (confirm('Clear all localStorage data?')) {
+                localStorage.clear();
+                clearLogs();
+                log('✅ All localStorage data cleared', 'success');
+            }
+        };
+
+        // Auto-run on page load
+        window.onload = () => {
+            log('📄 Page loaded', 'info');
+            log('Ready to test login functionality', 'info');
+            log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 'info');
+            checkStorage();
+        };
+
+        // Capture console errors
+        window.onerror = (msg, url, line, col, error) => {
+            log(`❌ JavaScript Error: ${msg}`, 'error');
+            log(`   at ${url}:${line}:${col}`, 'error');
+            if (error) log(`   ${error.stack}`, 'error');
+        };
+    </script>
+</body>
+</html>

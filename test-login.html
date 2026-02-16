@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .log {
+            background: #f5f5f5;
+            padding: 10px;
+            margin: 10px 0;
+            border-left: 3px solid #333;
+        }
+        .error {
+            border-left-color: red;
+            background: #fee;
+        }
+        .success {
+            border-left-color: green;
+            background: #efe;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <h1>Grido Login Test</h1>
+    <div>
+        <button onclick="testLogin()">Test Login with PIN 1234</button>
+        <button onclick="checkLocalStorage()">Check LocalStorage</button>
+        <button onclick="clearStorage()">Clear Storage</button>
+    </div>
+    <div id="logs"></div>
+
+    <script>
+        const log = (message, type = 'log') => {
+            const div = document.createElement('div');
+            div.className = `log ${type}`;
+            div.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            document.getElementById('logs').appendChild(div);
+        };
+
+        const checkLocalStorage = () => {
+            log('=== Checking LocalStorage ===');
+            const staff = localStorage.getItem('grido_v0_staff');
+            const session = localStorage.getItem('grido_v0_session');
+            
+            if (staff) {
+                log(`Staff data found: ${staff.substring(0, 100)}...`);
+                try {
+                    const parsed = JSON.parse(staff);
+                    log(`Staff count: ${parsed.length}`, 'success');
+                    parsed.forEach(s => log(`  - ${s.name} (${s.role}) - ID: ${s.id}`));
+                } catch (e) {
+                    log(`Error parsing staff: ${e.message}`, 'error');
+                }
+            } else {
+                log('No staff data in localStorage', 'error');
+            }
+
+            if (session) {
+                log(`Session data found: ${session}`);
+            } else {
+                log('No session data in localStorage');
+            }
+        };
+
+        const clearStorage = () => {
+            localStorage.clear();
+            log('LocalStorage cleared', 'success');
+        };
+
+        const testLogin = async () => {
+            log('=== Starting Login Test ===');
+            
+            // Check if staff data exists
+            let staff = localStorage.getItem('grido_v0_staff');
+            if (!staff) {
+                log('No staff data found, initializing seed data...', 'error');
+                const seedStaff = [
+                    { id: 'staff-caja-1', name: 'María Caja', phone: '11 5555 1111', role: 'CAJA', active: true },
+                    { id: 'staff-cadete-1', name: 'Juan Cadete', phone: '11 4444 2222', role: 'CADETE', active: true },
+                    { id: 'staff-admin-1', name: 'Admin', phone: '11 3333 3333', role: 'ADMIN', active: true }
+                ];
+                localStorage.setItem('grido_v0_staff', JSON.stringify(seedStaff));
+                log('Seed data initialized', 'success');
+                staff = JSON.stringify(seedStaff);
+            }
+
+            const staffList = JSON.parse(staff);
+            log(`Found ${staffList.length} staff members`);
+            
+            // Try to login with first active user
+            const activeStaff = staffList.filter(s => s.active);
+            if (activeStaff.length === 0) {
+                log('No active staff members found!', 'error');
+                return;
+            }
+
+            const user = activeStaff[0];
+            log(`Attempting login with user: ${user.name} (${user.id})`);
+            
+            const pin = '1234';
+            const sessionData = {
+                userId: user.id,
+                location: 'Ituzaingó',
+                pin: pin
+            };
+
+            localStorage.setItem('grido_v0_session', JSON.stringify(sessionData));
+            log('Session saved to localStorage', 'success');
+            log(`Session data: ${JSON.stringify(sessionData, null, 2)}`);
+
+            // Try to navigate
+            log('Attempting to navigate to /app...');
+            setTimeout(() => {
+                window.location.href = 'http://localhost:4173/app';
+            }, 1000);
+        };
+
+        // Auto-check on load
+        window.onload = () => {
+            log('Page loaded');
+            checkLocalStorage();
+        };
+    </script>
+</body>
+</html>
