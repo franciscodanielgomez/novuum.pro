@@ -12,6 +12,15 @@
 	import { formatMoney } from '$lib/utils';
 	import { supabase } from '$lib/supabase/client';
 	import { onMount } from 'svelte';
+	import { browser } from '$app/environment';
+	import { createTable, getCoreRowModel, getPaginationRowModel, type ColumnDef, type Table } from '@tanstack/table-core';
+	import {
+		loadProductsTableState,
+		saveProductsTableState,
+		type ProductsTableSortColumn,
+		type ProductsTableSorting
+	} from '$lib/components/products/products-table-persistence';
+	import ProductsPaginator from '$lib/components/products/ProductsPaginator.svelte';
 
 	type ProductCategoryLink = { category_id: string; categories: { id: string; name: string } | null };
 	type SupabaseProduct = {
@@ -47,6 +56,22 @@
 	type SortColumn = 'name' | 'category' | 'code' | 'price' | 'state';
 	let sortColumn = $state<SortColumn>('name');
 	let sortDir = $state<'asc' | 'desc'>('asc');
+
+	// Estado de tabla con persistencia (solo aplicado en cliente en onMount).
+	let searchQuery = $state('');
+	let pageIndex = $state(0);
+	let pageSize = $state(20);
+	const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
+
+	function persistProductsTable() {
+		if (!browser) return;
+		saveProductsTableState({
+			pageIndex,
+			pageSize,
+			search: searchQuery,
+			sorting: { column: sortColumn as ProductsTableSortColumn, dir: sortDir }
+		});
+	}
 
 	type CategoryOption = { id: string; name: string };
 	type ProductGroupOption = { id: string; name: string };
@@ -115,8 +140,20 @@
 	const groups = $derived(targetProductId ? $productsState.getGroupsByProduct(targetProductId) : []);
 	const totalProducts = products.length;
 
+	// Búsqueda global por nombre, descripción y categoría(s).
+	const filteredProducts = $derived.by(() => {
+		const q = String(searchQuery).trim().toLowerCase();
+		if (!q) return products;
+		return products.filter((p) => {
+			const name = (p.name ?? '').toLowerCase();
+			const desc = (p.description ?? '').toLowerCase();
+			const cat = getProductCategoryNames(p).toLowerCase();
+			return name.includes(q) || desc.includes(q) || cat.includes(q);
+		});
+	});
+
 	const sortedProducts = $derived.by(() => {
-		const list = [...products];
+		const list = [...filteredProducts];
 		const dir = sortDir === 'asc' ? 1 : -1;
 		list.sort((a, b) => {
 			let va: string | number;
@@ -157,9 +194,74 @@
 			sortColumn = col;
 			sortDir = 'asc';
 		}
+		pageIndex = 0;
+		persistProductsTable();
 	};
 
 	const SortIcon = (col: SortColumn) => (sortColumn === col ? (sortDir === 'asc' ? '↑' : '↓') : '↕');
+
+	// TanStack Table solo en cliente (SSR-safe); fuente de verdad para paginación.
+	const productColumns = $derived([
+		{ id: 'name', accessorKey: 'name', header: 'Nombre' },
+		{ id: 'category', accessorFn: (row: SupabaseProduct) => getProductCategoryNames(row), header: 'Categoría' },
+		{ id: 'code', accessorFn: (row: SupabaseProduct) => `#P${String(hash(row.id + row.name + 0)).padStart(6, '0')}`, header: 'Código' },
+		{ id: 'price', accessorFn: (row: SupabaseProduct) => getProductPrice(row), header: 'Precio' },
+		{ id: 'state', accessorFn: (row: SupabaseProduct) => (row.active ? 'Activo' : 'Inactivo'), header: 'Estado' }
+	] as ColumnDef<SupabaseProduct, unknown>[]);
+
+	const tableState = $derived({ pagination: { pageIndex, pageSize } });
+	const onStateChange = (updater: unknown) => {
+		const next = typeof updater === 'function' ? (updater as (prev: { pagination: { pageIndex: number; pageSize: number } }) => typeof tableState)(tableState) : updater;
+		const pag = (next as { pagination?: { pageIndex: number; pageSize: number } })?.pagination;
+		if (pag) {
+			pageIndex = pag.pageIndex;
+			pageSize = pag.pageSize;
+			persistProductsTable();
+		}
+	};
+
+	const table = $derived.by((): Table<SupabaseProduct> | null => {
+		if (!browser) return null;
+		return createTable({
+			data: sortedProducts,
+			columns: productColumns,
+			getRowId: (row) => row.id,
+			getCoreRowModel: getCoreRowModel(),
+			getPaginationRowModel: getPaginationRowModel(),
+			onPaginationChange: (updater) => {
+				const next = typeof updater === 'function' ? updater({ pageIndex, pageSize }) : updater;
+				pageIndex = next.pageIndex;
+				pageSize = next.pageSize;
+				persistProductsTable();
+			},
+			onStateChange: onStateChange as (updater: unknown) => void,
+			state: { pagination: tableState.pagination },
+			renderFallbackValue: ''
+		}) as Table<SupabaseProduct>;
+	});
+
+	const paginatedRows = $derived(table?.getRowModel().rows ?? []);
+	const tablePageCount = $derived(table?.getPageCount() ?? 1);
+	const totalFiltered = $derived(sortedProducts.length);
+
+	// Ajustar pageIndex si nos quedamos sin páginas (p. ej. tras filtrar).
+	$effect(() => {
+		const count = tablePageCount;
+		if (count > 0 && pageIndex >= count) {
+			pageIndex = Math.max(0, count - 1);
+			persistProductsTable();
+		}
+	});
+
+	function setPageIndex(idx: number) {
+		pageIndex = Math.max(0, Math.min(idx, Math.max(0, tablePageCount - 1)));
+		persistProductsTable();
+	}
+	function setPageSize(size: number) {
+		pageSize = size;
+		pageIndex = 0;
+		persistProductsTable();
+	}
 
 	const totalRevenue = $derived(products.reduce((acc, p) => acc + getProductPrice(p), 0));
 	const totalSold = $derived(useSupabase ? 0 : storeProducts.reduce((acc, p, i) => acc + buildMeta(p as unknown as (typeof products)[number], i).sales, 0));
@@ -399,6 +501,17 @@
 		void loadCategories();
 		void loadProductGroups();
 		void loadSupabaseProducts();
+		// Restaurar estado persistido de la tabla (solo en browser).
+		if (browser) {
+			const saved = loadProductsTableState();
+			if (saved.search !== undefined) searchQuery = saved.search;
+			if (saved.sorting) {
+				sortColumn = saved.sorting.column;
+				sortDir = saved.sorting.dir;
+			}
+			if (saved.pageIndex !== undefined) pageIndex = Math.max(0, saved.pageIndex);
+			if (saved.pageSize !== undefined && PAGE_SIZE_OPTIONS.includes(saved.pageSize)) pageSize = saved.pageSize;
+		}
 	});
 
 	$effect(() => {
@@ -477,120 +590,160 @@
 				No hay productos. Creá uno con «+ Add New Product».
 			</p>
 		{:else}
-		<div class="overflow-auto">
-			<table class="min-w-full text-sm">
-				<thead class="sticky top-0 z-10 bg-slate-50 dark:bg-slate-800">
-					<tr>
-						<th class="px-3 py-2 text-left">
-							<button
-								type="button"
-								class="flex items-center gap-1 font-medium hover:text-slate-700 dark:hover:text-slate-200"
-								onclick={() => setSort('name')}
-							>
-								Nombre {SortIcon('name')}
-							</button>
-						</th>
-						<th class="px-3 py-2 text-left">
-							<button
-								type="button"
-								class="flex items-center gap-1 font-medium hover:text-slate-700 dark:hover:text-slate-200"
-								onclick={() => setSort('category')}
-							>
-								Categoría {SortIcon('category')}
-							</button>
-						</th>
-						<th class="px-3 py-2 text-left">
-							<button
-								type="button"
-								class="flex items-center gap-1 font-medium hover:text-slate-700 dark:hover:text-slate-200"
-								onclick={() => setSort('code')}
-							>
-								Código {SortIcon('code')}
-							</button>
-						</th>
-						<th class="px-3 py-2 text-left">
-							<button
-								type="button"
-								class="flex items-center gap-1 font-medium hover:text-slate-700 dark:hover:text-slate-200"
-								onclick={() => setSort('price')}
-							>
-								Precio {SortIcon('price')}
-							</button>
-						</th>
-						<th class="px-3 py-2 text-right">
-							<button
-								type="button"
-								class="ml-auto flex items-center gap-1 font-medium hover:text-slate-700 dark:hover:text-slate-200"
-								onclick={() => setSort('state')}
-							>
-								Estado {SortIcon('state')}
-							</button>
-						</th>
-						<th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Acciones</th>
-					</tr>
-				</thead>
-				<tbody>
-					{#each sortedProducts as product, index}
-						{@const meta = buildMeta(product, index)}
-						<tr class="border-t border-slate-100 transition hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/40">
-							<td class="px-3 py-2">
-								<button
-									type="button"
-									class="cursor-pointer text-left font-medium text-slate-900 underline-offset-2 hover:underline hover:text-slate-700 dark:text-slate-100 dark:hover:text-slate-300"
-									title="Clic para editar"
-									onclick={() => openEditProduct(product.id)}
-								>
-									{product.name}
-								</button>
-							</td>
-							<td class="px-3 py-2">
-								{#if useSupabase && supabaseProducts.length > 0}
-									{@const catNames = getProductCategoryNamesArray(product)}
-									{#if catNames.length > 0}
-										<div class="flex flex-wrap gap-1">
-											{#each catNames as name}
-												<span
-													class="inline-flex rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-600 dark:text-slate-200"
-												>
-													{name}
-												</span>
-											{/each}
-										</div>
-									{:else}
-										<span class="text-slate-400">—</span>
-									{/if}
-								{:else}
-									<span class="text-slate-400">—</span>
-								{/if}
-							</td>
-							<td class="px-3 py-2">{meta.code}</td>
-							<td class="px-3 py-2">{formatMoney(getProductPrice(product))}</td>
-							<td class="px-3 py-2 text-right">
-								<span
-									class="inline-flex rounded-full px-2 py-1 text-xs font-medium"
-									class:bg-emerald-100={product.active}
-									class:text-emerald-700={product.active}
-									class:bg-slate-200={!product.active}
-									class:text-slate-600={!product.active}
-									class:dark:bg-emerald-900={product.active}
-									class:dark:text-emerald-200={product.active}
-									class:dark:bg-slate-700={!product.active}
-									class:dark:text-slate-400={!product.active}
-								>
-									{product.active ? 'Activo' : 'Inactivo'}
-								</span>
-							</td>
-							<td class="px-3 py-2">
-								<button class="btn-secondary !px-2 !py-1 text-xs" onclick={() => openEditProduct(product.id)}>Editar</button>
-							</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
-		</div>
-		<div class="mt-4 text-sm text-slate-500 dark:text-slate-400">
-			Mostrando 1–{totalProducts} de {totalProducts}
-		</div>
+			<!-- Búsqueda global: nombre, descripción, categoría. Al cambiar, resetear página. -->
+			{#if browser}
+				<div class="mb-4">
+					<label for="products-search" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Buscar</label>
+					<input
+						id="products-search"
+						type="search"
+						class="input mt-1 max-w-md"
+						placeholder="Nombre, descripción o categoría…"
+						aria-label="Buscar productos"
+						value={searchQuery}
+						oninput={(e) => {
+							searchQuery = (e.currentTarget as HTMLInputElement).value;
+							pageIndex = 0;
+							persistProductsTable();
+						}}
+					/>
+				</div>
+			{/if}
+
+			{#if !browser}
+				<div class="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400">
+					Cargando tabla…
+				</div>
+			{:else if !table}
+				<div class="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400">
+					Cargando tabla…
+				</div>
+			{:else}
+				<div class="overflow-auto">
+					<table class="min-w-full text-sm">
+						<thead class="sticky top-0 z-10 bg-slate-50 dark:bg-slate-800">
+							<tr>
+								<th class="px-3 py-2 text-left">
+									<button
+										type="button"
+										class="flex items-center gap-1 font-medium hover:text-slate-700 dark:hover:text-slate-200"
+										onclick={() => setSort('name')}
+									>
+										Nombre {SortIcon('name')}
+									</button>
+								</th>
+								<th class="px-3 py-2 text-left">
+									<button
+										type="button"
+										class="flex items-center gap-1 font-medium hover:text-slate-700 dark:hover:text-slate-200"
+										onclick={() => setSort('category')}
+									>
+										Categoría {SortIcon('category')}
+									</button>
+								</th>
+								<th class="px-3 py-2 text-left">
+									<button
+										type="button"
+										class="flex items-center gap-1 font-medium hover:text-slate-700 dark:hover:text-slate-200"
+										onclick={() => setSort('code')}
+									>
+										Código {SortIcon('code')}
+									</button>
+								</th>
+								<th class="px-3 py-2 text-left">
+									<button
+										type="button"
+										class="flex items-center gap-1 font-medium hover:text-slate-700 dark:hover:text-slate-200"
+										onclick={() => setSort('price')}
+									>
+										Precio {SortIcon('price')}
+									</button>
+								</th>
+								<th class="px-3 py-2 text-right">
+									<button
+										type="button"
+										class="ml-auto flex items-center gap-1 font-medium hover:text-slate-700 dark:hover:text-slate-200"
+										onclick={() => setSort('state')}
+									>
+										Estado {SortIcon('state')}
+									</button>
+								</th>
+								<th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Acciones</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each paginatedRows as row}
+								{@const product = row.original}
+								{@const meta = buildMeta(product, row.index)}
+								<tr class="border-t border-slate-100 transition hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/40">
+									<td class="px-3 py-2">
+										<button
+											type="button"
+											class="cursor-pointer text-left font-medium text-slate-900 underline-offset-2 hover:underline hover:text-slate-700 dark:text-slate-100 dark:hover:text-slate-300"
+											title="Clic para editar"
+											onclick={() => openEditProduct(product.id)}
+										>
+											{product.name}
+										</button>
+									</td>
+									<td class="px-3 py-2">
+										{#if useSupabase && supabaseProducts.length > 0}
+											{@const catNames = getProductCategoryNamesArray(product)}
+											{#if catNames.length > 0}
+												<div class="flex flex-wrap gap-1">
+													{#each catNames as name}
+														<span
+															class="inline-flex rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-600 dark:text-slate-200"
+														>
+															{name}
+														</span>
+													{/each}
+												</div>
+											{:else}
+												<span class="text-slate-400">—</span>
+											{/if}
+										{:else}
+											<span class="text-slate-400">—</span>
+										{/if}
+									</td>
+									<td class="px-3 py-2">{meta.code}</td>
+									<td class="px-3 py-2">{formatMoney(getProductPrice(product))}</td>
+									<td class="px-3 py-2 text-right">
+										<span
+											class="inline-flex rounded-full px-2 py-1 text-xs font-medium"
+											class:bg-emerald-100={product.active}
+											class:text-emerald-700={product.active}
+											class:bg-slate-200={!product.active}
+											class:text-slate-600={!product.active}
+											class:dark:bg-emerald-900={product.active}
+											class:dark:text-emerald-200={product.active}
+											class:dark:bg-slate-700={!product.active}
+											class:dark:text-slate-400={!product.active}
+										>
+											{product.active ? 'Activo' : 'Inactivo'}
+										</span>
+									</td>
+									<td class="px-3 py-2">
+										<button class="btn-secondary !px-2 !py-1 text-xs" onclick={() => openEditProduct(product.id)}>Editar</button>
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+				<!-- Paginador Melt UI: Primero | Anterior | números | Siguiente | Último + tamaño de página -->
+				<div class="mt-4">
+					<ProductsPaginator
+						totalRows={totalFiltered}
+						pageSize={pageSize}
+						pageIndex={pageIndex}
+						pageCount={tablePageCount}
+						pageSizeOptions={PAGE_SIZE_OPTIONS}
+						onPageIndexChange={setPageIndex}
+						onPageSizeChange={setPageSize}
+					/>
+				</div>
+			{/if}
 		{/if}
 	</section>
 </div>

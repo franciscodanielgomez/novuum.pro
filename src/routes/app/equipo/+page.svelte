@@ -1,20 +1,30 @@
 <script lang="ts">
 	import SideDrawer from '$lib/components/SideDrawer.svelte';
+	import { DataTable } from '$lib/components/table';
+	import type { DataTableColumn } from '$lib/components/table';
 	import { staffStore } from '$lib/stores/staff';
 	import { sessionStore } from '$lib/stores/session';
 	import { toastsStore } from '$lib/stores/toasts';
 	import type { Staff, StaffRole } from '$lib/types';
 	import { onMount } from 'svelte';
 
-	let drawerOpen = false;
-	let editing: Staff | null = null;
-	let form: { name: string; role: StaffRole; active: boolean } = {
+	let drawerOpen = $state(false);
+	let loading = $state(true);
+	let editing = $state<Staff | null>(null);
+	let form = $state<{ name: string; role: StaffRole; active: boolean }>({
 		name: '',
 		role: 'CAJERO',
 		active: true
-	};
+	});
 
-	$: canManage = $sessionStore.user?.role === 'ADMINISTRADOR';
+	const canManage = $derived($sessionStore.user?.role === 'ADMINISTRADOR');
+
+	const columns: DataTableColumn<Staff>[] = [
+		{ id: 'name', header: 'Nombre', accessorKey: 'name' },
+		{ id: 'email', header: 'Email', accessorFn: (r) => r.email ?? '—' },
+		{ id: 'role', header: 'Rol', accessorKey: 'role' },
+		{ id: 'active', header: 'Activo', accessorFn: (r) => (r.active ? 'Sí' : 'No') }
+	];
 
 	const openEdit = (member: Staff) => {
 		editing = member;
@@ -34,7 +44,11 @@
 	};
 
 	onMount(async () => {
-		await staffStore.load();
+		try {
+			await staffStore.load();
+		} finally {
+			loading = false;
+		}
 	});
 </script>
 
@@ -48,37 +62,18 @@
 		</div>
 	</div>
 
-	<div class="panel overflow-auto">
-		<table class="min-w-full text-sm">
-			<thead class="bg-slate-50 dark:bg-slate-800">
-				<tr>
-					<th class="px-3 py-2 text-left">Nombre</th>
-					<th class="px-3 py-2 text-left">Email</th>
-					<th class="px-3 py-2 text-left">Rol</th>
-					<th class="px-3 py-2 text-left">Activo</th>
-					<th class="px-3 py-2 text-left">Acciones</th>
-				</tr>
-			</thead>
-			<tbody>
-				{#each $staffStore as member}
-					<tr class="border-t border-slate-100 dark:border-slate-700">
-						<td class="px-3 py-2">{member.name}</td>
-						<td class="px-3 py-2">{member.email ?? '-'}</td>
-						<td class="px-3 py-2">{member.role}</td>
-						<td class="px-3 py-2">{member.active ? 'Sí' : 'No'}</td>
-						<td class="px-3 py-2">
-							<button
-								class="btn-secondary !px-2 !py-1 text-xs"
-								disabled={!canManage}
-								onclick={() => openEdit(member)}
-							>
-								Editar
-							</button>
-						</td>
-					</tr>
-				{/each}
-			</tbody>
-		</table>
+	<div class="panel p-4">
+		<DataTable
+			tableId="equipo"
+			data={$staffStore}
+			columns={columns}
+			rowId={(r) => r.id}
+			globalSearch={{ keys: ['name', 'email', 'role'], placeholder: 'Buscar por nombre o email' }}
+			actions={[{ label: 'Editar', onClick: openEdit, variant: 'secondary' }]}
+			emptyMessage="No hay miembros cargados. Si deberías ver datos, probá cerrar sesión y volver a entrar."
+			loading={loading}
+			persistState={true}
+		/>
 	</div>
 </div>
 
@@ -101,6 +96,6 @@
 			<input type="checkbox" bind:checked={form.active} />
 			Activo
 		</label>
-		<button class="btn-primary" onclick={save}>Guardar</button>
+		<button class="btn-primary" onclick={save} disabled={!canManage}>Guardar</button>
 	</div>
 </SideDrawer>

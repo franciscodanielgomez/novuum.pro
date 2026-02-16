@@ -84,11 +84,33 @@ export const sessionStore = {
 				localLocation = 'Ituzaingó';
 			}
 		}
-		const shift = await api.shifts.getOpen();
-		const {
-			data: { user }
-		} = await supabase.auth.getUser();
-		const mappedUser = await mapUser(user);
+		let shift: Shift | null = null;
+		let user: User | null = null;
+		try {
+			shift = await api.shifts.getOpen();
+		} catch {
+			// Sin conexión con la API
+		}
+		try {
+			const { data } = await supabase.auth.getUser();
+			user = data?.user ?? null;
+		} catch {
+			// Supabase auth no disponible
+		}
+		let mappedUser: AppUser | null = null;
+		try {
+			mappedUser = await mapUser(user);
+		} catch {
+			// Perfil no cargó; usar datos básicos del auth si hay user
+			if (user?.id && user?.email) {
+				mappedUser = {
+					id: user.id,
+					email: user.email,
+					name: (user.user_metadata?.name as string)?.trim() || user.email,
+					role: 'CAJERO'
+				};
+			}
+		}
 		state.set({
 			user: mappedUser,
 			location: localLocation,
@@ -99,12 +121,25 @@ export const sessionStore = {
 		if (listenerInitialized) return;
 		listenerInitialized = true;
 		supabase.auth.onAuthStateChange(async (_event, session) => {
-			const mapped = await mapUser(session?.user ?? null);
-			state.update((s) => ({
-				...s,
-				user: mapped,
-				ready: true
-			}));
+			try {
+				const mapped = await mapUser(session?.user ?? null);
+				state.update((s) => ({
+					...s,
+					user: mapped,
+					ready: true
+				}));
+			} catch {
+				state.update((s) => ({
+					...s,
+					user: session?.user ? {
+						id: session.user.id,
+						email: session.user.email ?? '',
+						name: ((session.user.user_metadata?.name as string)?.trim() || session.user.email) ?? 'Usuario',
+						role: 'CAJERO'
+					} : null,
+					ready: true
+				}));
+			}
 		});
 	},
 	login: async (email: string, password: string) => {

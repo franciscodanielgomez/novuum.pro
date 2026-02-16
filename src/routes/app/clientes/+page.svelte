@@ -1,22 +1,31 @@
 <script lang="ts">
 	import SideDrawer from '$lib/components/SideDrawer.svelte';
+	import { DataTable } from '$lib/components/table';
+	import type { DataTableColumn } from '$lib/components/table';
 	import { customerSchema } from '$lib/schemas';
 	import { customersStore } from '$lib/stores/customers';
 	import { toastsStore } from '$lib/stores/toasts';
 	import type { Customer } from '$lib/types';
 	import { onMount } from 'svelte';
 
-	let query = '';
-	let drawerOpen = false;
-	let editing: Customer | null = null;
-	let form = { phone: '', address: '', betweenStreets: '', notes: '' };
+	let drawerOpen = $state(false);
+	let loading = $state(true);
+	let editing = $state<Customer | null>(null);
+	let form = $state({ phone: '', address: '', betweenStreets: '', notes: '' });
 
-	$: filtered = $customersStore.filter(
-		(c) =>
-			!query ||
-			c.phone.toLowerCase().includes(query.toLowerCase()) ||
-			c.address.toLowerCase().includes(query.toLowerCase())
-	);
+	// Garantizar array para DataTable (evitar undefined si el store no está listo).
+	let customersList = $state<Customer[]>([]);
+	$effect(() => {
+		const value = $customersStore;
+		customersList = Array.isArray(value) ? value : [];
+	});
+
+	const columns: DataTableColumn<Customer>[] = [
+		{ id: 'phone', header: 'Teléfono', accessorKey: 'phone' },
+		{ id: 'address', header: 'Dirección', accessorKey: 'address' },
+		{ id: 'betweenStreets', header: 'Entre calles', accessorFn: (r) => r.betweenStreets ?? '—' },
+		{ id: 'notes', header: 'Observación', accessorFn: (r) => r.notes ?? '—' }
+	];
 
 	const openNew = () => {
 		editing = null;
@@ -52,43 +61,31 @@
 	};
 
 	onMount(async () => {
-		await customersStore.load();
+		try {
+			await customersStore.load();
+		} finally {
+			loading = false;
+		}
 	});
 </script>
 
 <div class="space-y-4">
 	<div class="panel p-4">
-		<div class="flex flex-wrap items-center justify-between gap-3">
-			<input class="input max-w-md" placeholder="Buscar por teléfono o dirección" bind:value={query} />
+		<div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+			<span class="text-sm text-slate-600 dark:text-slate-400">Clientes</span>
 			<button class="btn-primary" onclick={openNew}>Nuevo cliente</button>
 		</div>
-	</div>
-
-	<div class="panel overflow-auto">
-		<table class="min-w-full text-sm">
-			<thead class="bg-slate-50 dark:bg-slate-800">
-				<tr>
-					<th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Teléfono</th>
-					<th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Dirección</th>
-					<th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Entre calles</th>
-					<th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Observación</th>
-					<th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Acciones</th>
-				</tr>
-			</thead>
-			<tbody>
-				{#each filtered as customer}
-					<tr class="border-t border-slate-100 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/40">
-						<td class="px-3 py-2">{customer.phone}</td>
-						<td class="px-3 py-2">{customer.address}</td>
-						<td class="px-3 py-2">{customer.betweenStreets ?? '-'}</td>
-						<td class="px-3 py-2">{customer.notes ?? '-'}</td>
-						<td class="px-3 py-2">
-							<button class="btn-secondary !px-2 !py-1 text-xs" onclick={() => openEdit(customer)}>Editar</button>
-						</td>
-					</tr>
-				{/each}
-			</tbody>
-		</table>
+		<DataTable
+			tableId="clientes"
+			data={customersList}
+			columns={columns}
+			rowId={(c) => c.id}
+			globalSearch={{ keys: ['phone', 'address', 'betweenStreets', 'notes'], placeholder: 'Buscar por teléfono o dirección' }}
+			actions={[{ label: 'Editar', onClick: openEdit, variant: 'secondary' }]}
+			emptyMessage="No hay clientes. Creá uno con «Nuevo cliente»."
+			loading={loading}
+			persistState={true}
+		/>
 	</div>
 </div>
 

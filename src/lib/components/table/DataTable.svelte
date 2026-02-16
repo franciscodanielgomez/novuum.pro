@@ -21,6 +21,7 @@
 	} from './table.types';
 	import { browser } from '$app/environment';
 	import { onMount } from 'svelte';
+	import DataTablePaginator from './DataTablePaginator.svelte';
 
 	type Props = DataTableProps<TData>;
 
@@ -80,7 +81,7 @@
 
 	// Apply external filters (chips, date, select) and global search in one pass over data
 	const filteredData = $derived.by(() => {
-		let rows = data;
+		let rows = Array.isArray(data) ? data : [];
 		const q = String(globalSearchInput).trim();
 		if (globalSearch && q) {
 			rows = applyGlobalSearch(rows, q, globalSearch.keys);
@@ -135,11 +136,14 @@
 
 	const columnDefs = $derived(buildColumnDefs());
 
+	// columnPinning debe existir para que getHeaderGroups() no falle leyendo .columnPinning.left (TanStack Table).
+	const defaultColumnPinning = { left: [], right: [] };
 	const tableState = $derived({
 		sorting,
 		columnVisibility,
 		columnOrder: columnOrder ?? columns.map((c) => c.id).concat(actions.length ? ['__actions__'] : []),
-		pagination
+		pagination,
+		columnPinning: defaultColumnPinning
 	});
 
 	type TableStateSubset = { sorting: typeof sorting; columnVisibility: typeof columnVisibility; columnOrder: string[]; pagination: typeof pagination };
@@ -178,14 +182,23 @@
 				sorting: defaultSorting,
 				columnVisibility: defaultColumnVisibility,
 				columnOrder: defaultColumnOrderResolved,
-				pagination: { pageIndex: 0, pageSize: defaultPageSize }
+				pagination: { pageIndex: 0, pageSize: defaultPageSize },
+				columnPinning: defaultColumnPinning
 			}
 		}) as Table<TData>;
 	});
 
 	const emptyRowModel = { rows: [], flatRows: [], rowsById: {} };
+	const safeHeaderGroups = () => {
+		if (!table) return [];
+		try {
+			return table.getHeaderGroups();
+		} catch {
+			return [];
+		}
+	};
 	const rowModel = $derived(table ? table.getRowModel() : emptyRowModel);
-	const headerGroups = $derived(table ? table.getHeaderGroups() : []);
+	const headerGroups = $derived(safeHeaderGroups());
 	const pageOptions = $derived(table ? table.getPageCount() : 0);
 	const canPrev = $derived(table ? table.getCanPreviousPage() : false);
 	const canNext = $derived(table ? table.getCanNextPage() : false);
@@ -339,25 +352,6 @@
 					</div>
 				{/if}
 			</div>
-
-			<!-- Page size -->
-			<label class="flex items-center gap-1 text-sm text-slate-600 dark:text-slate-400">
-				<span>Mostrar</span>
-				<select
-					class="input !w-16 !py-1 text-sm"
-					aria-label="Filas por página"
-					value={pageSize}
-					onchange={(e) => {
-						const v = Number((e.currentTarget as HTMLSelectElement).value);
-						pagination = { pageIndex: 0, pageSize: v };
-						if (persistState) saveTableState(tableId, { ...loadTableState(tableId), pagination: { pageIndex: 0, pageSize: v } });
-					}}
-				>
-					{#each pageSizeOptions as n}
-						<option value={n}>{n}</option>
-					{/each}
-				</select>
-			</label>
 		</div>
 	</div>
 
@@ -436,39 +430,22 @@
 		</table>
 	</div>
 
-	<div class="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-500 dark:text-slate-400">
-		<span>
-			Mostrando {from}–{to} de {totalRows}
-		</span>
-		<div class="flex items-center gap-2">
-			<button
-				type="button"
-				class="rounded border border-slate-200 px-2 py-1 disabled:opacity-50 dark:border-slate-600"
-				disabled={!canPrev}
-				aria-label="Página anterior"
-				onclick={() => {
-					pagination = { ...pagination, pageIndex: Math.max(0, pageIndex - 1) };
-					if (persistState) saveTableState(tableId, { ...loadTableState(tableId), pagination });
-				}}
-			>
-				Anterior
-			</button>
-			<span>
-				Página {pageIndex + 1} de {Math.max(1, pageOptions)}
-			</span>
-			<button
-				type="button"
-				class="rounded border border-slate-200 px-2 py-1 disabled:opacity-50 dark:border-slate-600"
-				disabled={!canNext}
-				aria-label="Página siguiente"
-				onclick={() => {
-					pagination = { ...pagination, pageIndex: Math.min(pageOptions - 1, pageIndex + 1) };
-					if (persistState) saveTableState(tableId, { ...loadTableState(tableId), pagination });
-				}}
-			>
-				Siguiente
-			</button>
-		</div>
+	<div class="mt-4">
+		<DataTablePaginator
+			totalRows={totalRows}
+			pageSize={pagination.pageSize}
+			pageIndex={pagination.pageIndex}
+			pageCount={Math.max(1, pageOptions)}
+			pageSizeOptions={pageSizeOptions}
+			onPageIndexChange={(idx) => {
+				pagination = { ...pagination, pageIndex: idx };
+				if (persistState) saveTableState(tableId, { ...loadTableState(tableId), pagination });
+			}}
+			onPageSizeChange={(size) => {
+				pagination = { pageIndex: 0, pageSize: size };
+				if (persistState) saveTableState(tableId, { ...loadTableState(tableId), pagination });
+			}}
+		/>
 	</div>
 	{/if}
 	{/if}

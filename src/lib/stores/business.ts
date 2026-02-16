@@ -58,24 +58,27 @@ export const businessStore = {
 	subscribe: state.subscribe,
 	load: async () => {
 		state.update((s) => ({ ...s, loading: true }));
-		const { data, error } = await supabase
-			.from('business_settings')
-			.select('id, company_name, branch_name, logo_url')
-			.order('created_at', { ascending: true })
-			.limit(1)
-			.maybeSingle();
+		try {
+			const { data, error } = await supabase
+				.from('business_settings')
+				.select('id, company_name, branch_name, logo_url')
+				.order('created_at', { ascending: true })
+				.limit(1)
+				.maybeSingle();
 
-		if (!error && data) {
-			const next: BusinessSettings = {
-				companyName: data.company_name?.trim() || DEFAULT_SETTINGS.companyName,
-				branchName: data.branch_name?.trim() || DEFAULT_SETTINGS.branchName,
-				logoUrl: data.logo_url?.trim() || null
-			};
-			writeFallback(next);
-			state.set({ id: data.id, ...next, loading: false });
-			return;
+			if (!error && data) {
+				const next: BusinessSettings = {
+					companyName: data.company_name?.trim() || DEFAULT_SETTINGS.companyName,
+					branchName: data.branch_name?.trim() || DEFAULT_SETTINGS.branchName,
+					logoUrl: data.logo_url?.trim() || null
+				};
+				writeFallback(next);
+				state.set({ id: data.id, ...next, loading: false });
+				return;
+			}
+		} catch {
+			// Sin conexión o error: usar fallback de localStorage o valores por defecto
 		}
-
 		state.set({ id: null, ...readFallback(), loading: false });
 	},
 	updateSettings: async (settings: BusinessSettings) => {

@@ -88,6 +88,15 @@
 
 </script>
 
+{#if !$sessionStore.ready}
+	<div class="flex min-h-screen items-center justify-center bg-slate-100 dark:bg-slate-950">
+		<p class="text-slate-600 dark:text-slate-400">Cargando sesión…</p>
+	</div>
+{:else if !$sessionStore.user}
+	<div class="flex min-h-screen items-center justify-center bg-slate-100 dark:bg-slate-950">
+		<p class="text-slate-600 dark:text-slate-400">Redirigiendo al inicio de sesión…</p>
+	</div>
+{:else}
 <div class="flex min-h-screen bg-slate-100 dark:bg-slate-950">
 	<aside
 		class="flex flex-col border-r border-slate-200 bg-white transition-all dark:border-slate-700 dark:bg-slate-900"
@@ -382,5 +391,6 @@
 		<main class="min-h-0 flex-1 p-4 md:p-6">{@render children()}</main>
 	</div>
 </div>
+{/if}
 
 <ToastHost />

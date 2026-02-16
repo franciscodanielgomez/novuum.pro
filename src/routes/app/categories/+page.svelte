@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { Dialog } from 'bits-ui';
+	import { DataTable } from '$lib/components/table';
+	import type { DataTableColumn } from '$lib/components/table';
 	import { supabase } from '$lib/supabase/client';
 	import { toastsStore } from '$lib/stores/toasts';
 	import { onMount } from 'svelte';
@@ -20,21 +22,38 @@
 	let form = $state({ name: '', sort_order: 0, active: true });
 	let saving = $state(false);
 
+	const columns: DataTableColumn<Category>[] = [
+		{ id: 'name', header: 'Nombre', accessorKey: 'name' },
+		{ id: 'sort_order', header: 'Orden', accessorKey: 'sort_order' },
+		{ id: 'active', header: 'Estado', accessorFn: (r) => (r.active ? 'Activa' : 'Inactiva') }
+	];
+
 	const loadCategories = async () => {
 		loading = true;
-		const { data, error } = await supabase
-			.from('categories')
-			.select('id, name, sort_order, active, created_at, updated_at')
-			.order('sort_order', { ascending: true })
-			.order('name', { ascending: true });
+		const timeoutId = setTimeout(() => {
+			loading = false;
+			toastsStore.error('La carga de categorías tardó demasiado. Revisá la conexión o volvé a iniciar sesión.');
+		}, 12_000);
+		try {
+			const { data, error } = await supabase
+				.from('categories')
+				.select('id, name, sort_order, active, created_at, updated_at')
+				.order('sort_order', { ascending: true })
+				.order('name', { ascending: true });
 
-		if (error) {
-			toastsStore.error(error.message || 'Error al cargar categorías');
+			if (error) {
+				toastsStore.error(error.message || 'Error al cargar categorías. Si sigue fallando, probá cerrar sesión y volver a entrar.');
+				categories = [];
+			} else {
+				categories = data ?? [];
+			}
+		} catch (e) {
+			toastsStore.error(e instanceof Error ? e.message : 'Error al cargar categorías. Revisá la conexión.');
 			categories = [];
-		} else {
-			categories = data ?? [];
+		} finally {
+			clearTimeout(timeoutId);
+			loading = false;
 		}
-		loading = false;
 	};
 
 	const openCreate = () => {
@@ -121,64 +140,20 @@
 	</div>
 
 	<section class="panel p-4">
-		{#if loading}
-			<p class="py-8 text-center text-sm text-slate-500 dark:text-slate-400">Cargando…</p>
-		{:else if categories.length === 0}
-			<p class="py-8 text-center text-sm text-slate-500 dark:text-slate-400">
-				Aún no hay categorías. Creá una con "Nueva categoría".
-			</p>
-		{:else}
-			<div class="overflow-auto">
-				<table class="min-w-full text-sm">
-					<thead class="bg-slate-50 dark:bg-slate-800">
-						<tr>
-							<th class="px-3 py-2 text-left">Nombre</th>
-							<th class="px-3 py-2 text-left">Orden</th>
-							<th class="px-3 py-2 text-left">Estado</th>
-							<th class="px-3 py-2 text-left">Acciones</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each categories as cat}
-							<tr
-								class="border-t border-slate-100 transition hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/40"
-							>
-								<td class="px-3 py-2 font-medium">{cat.name}</td>
-								<td class="px-3 py-2">{cat.sort_order}</td>
-								<td class="px-3 py-2">
-									<span
-										class="rounded-full px-2 py-1 text-xs"
-										class:bg-emerald-100={cat.active}
-										class:text-emerald-700={cat.active}
-										class:bg-slate-200={!cat.active}
-										class:text-slate-600={!cat.active}
-										class:dark:bg-emerald-900={cat.active}
-										class:dark:text-emerald-200={cat.active}
-										class:dark:bg-slate-700={!cat.active}
-										class:dark:text-slate-400={!cat.active}
-									>
-										{cat.active ? 'Activa' : 'Inactiva'}
-									</span>
-								</td>
-								<td class="px-3 py-2">
-									<div class="flex gap-2">
-										<button class="btn-secondary !px-2 !py-1 text-xs" onclick={() => openEdit(cat)}>
-											Editar
-										</button>
-										<button class="btn-danger !px-2 !py-1 text-xs" onclick={() => remove(cat.id)}>
-											Eliminar
-										</button>
-									</div>
-								</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
-			<div class="mt-4 text-sm text-slate-500 dark:text-slate-400">
-				Mostrando 1–{categories.length} de {categories.length}
-			</div>
-		{/if}
+		<DataTable
+			tableId="categories"
+			data={categories}
+			columns={columns}
+			rowId={(c) => c.id}
+			globalSearch={{ keys: ['name'], placeholder: 'Buscar por nombre' }}
+			actions={[
+				{ label: 'Editar', onClick: openEdit, variant: 'secondary' },
+				{ label: 'Eliminar', onClick: (c) => remove(c.id), variant: 'danger' }
+			]}
+			emptyMessage="Aún no hay categorías. Creá una con «Nueva categoría»."
+			loading={loading}
+			persistState={true}
+		/>
 	</section>
 </div>
 

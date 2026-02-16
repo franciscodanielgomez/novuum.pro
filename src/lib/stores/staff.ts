@@ -37,25 +37,36 @@ const ensureCurrentUserVisible = async (members: Staff[]): Promise<Staff[]> => {
 export const staffStore = {
 	subscribe: staff.subscribe,
 	load: async () => {
-		const { data, error } = await supabase
-			.from('team_members')
-			.select('id, full_name, email, role, active')
-			.order('created_at', { ascending: false });
+		try {
+			const { data, error } = await supabase
+				.from('team_members')
+				.select('id, full_name, email, role, active')
+				.order('created_at', { ascending: false });
 
-		if (!error && data) {
-			const mapped = data.map((row) => ({
+			if (!error && data) {
+				const mapped = data.map((row) => ({
 					id: row.id,
 					name: row.full_name ?? row.email ?? 'Usuario',
 					email: row.email ?? undefined,
 					role: mapLegacyRole(row.role),
 					active: Boolean(row.active)
 				}));
-			staff.set(await ensureCurrentUserVisible(mapped));
-			return;
+				try {
+					staff.set(await ensureCurrentUserVisible(mapped));
+				} catch {
+					staff.set(mapped);
+				}
+				return;
+			}
+		} catch {
+			// Supabase falló (red, permisos, etc.): usar fallback local.
 		}
-
-		// Fallback local para entorno sin tablas Supabase creadas.
-		staff.set(await ensureCurrentUserVisible(await api.staff.list()));
+		// Fallback local para entorno sin tablas Supabase o sin acceso.
+		try {
+			staff.set(await ensureCurrentUserVisible(await api.staff.list()));
+		} catch {
+			staff.set([]);
+		}
 	},
 	create: async (payload: Omit<Staff, 'id'>) => {
 		await api.staff.create(payload);

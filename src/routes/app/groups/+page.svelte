@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { Dialog } from 'bits-ui';
+	import { DataTable } from '$lib/components/table';
+	import type { DataTableColumn } from '$lib/components/table';
 	import { supabase } from '$lib/supabase/client';
 	import { toastsStore } from '$lib/stores/toasts';
 	import { onMount } from 'svelte';
@@ -47,19 +49,30 @@
 
 	const loadGroups = async () => {
 		loading = true;
-		const { data, error } = await supabase
-			.from('product_groups')
-			.select('id, name, sort_order, active, created_at, updated_at')
-			.order('sort_order', { ascending: true })
-			.order('name', { ascending: true });
+		const timeoutId = setTimeout(() => {
+			loading = false;
+			toastsStore.error('La carga de grupos tardó demasiado. Revisá la conexión.');
+		}, 12_000);
+		try {
+			const { data, error } = await supabase
+				.from('product_groups')
+				.select('id, name, sort_order, active, created_at, updated_at')
+				.order('sort_order', { ascending: true })
+				.order('name', { ascending: true });
 
-		if (error) {
-			toastsStore.error(error.message || 'Error al cargar grupos');
+			if (error) {
+				toastsStore.error(error.message || 'Error al cargar grupos. Si sigue fallando, probá cerrar sesión y volver a entrar.');
+				groups = [];
+			} else {
+				groups = data ?? [];
+			}
+		} catch (e) {
+			toastsStore.error(e instanceof Error ? e.message : 'Error al cargar grupos. Revisá la conexión o volvé a iniciar sesión.');
 			groups = [];
-		} else {
-			groups = data ?? [];
+		} finally {
+			clearTimeout(timeoutId);
+			loading = false;
 		}
-		loading = false;
 	};
 
 	const loadGroupItems = async (groupId: string) => {
@@ -260,6 +273,12 @@
 	});
 
 	const activeCount = $derived(groups.filter((g) => g.active).length);
+
+	const groupColumns: DataTableColumn<Group>[] = [
+		{ id: 'name', header: 'Nombre', accessorKey: 'name' },
+		{ id: 'sort_order', header: 'Orden', accessorKey: 'sort_order' },
+		{ id: 'active', header: 'Estado', accessorFn: (r) => (r.active ? 'Activo' : 'Inactivo') }
+	];
 </script>
 
 <div class="space-y-4">
@@ -280,64 +299,20 @@
 	</div>
 
 	<section class="panel p-4">
-		{#if loading}
-			<p class="py-8 text-center text-sm text-slate-500 dark:text-slate-400">Cargando…</p>
-		{:else if groups.length === 0}
-			<p class="py-8 text-center text-sm text-slate-500 dark:text-slate-400">
-				Aún no hay grupos. Creá uno con "Nuevo grupo" (ej. Sabores).
-			</p>
-		{:else}
-			<div class="overflow-auto">
-				<table class="min-w-full text-sm">
-					<thead class="bg-slate-50 dark:bg-slate-800">
-						<tr>
-							<th class="px-3 py-2 text-left">Nombre</th>
-							<th class="px-3 py-2 text-left">Orden</th>
-							<th class="px-3 py-2 text-left">Estado</th>
-							<th class="px-3 py-2 text-left">Acciones</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each groups as grp}
-							<tr
-								class="border-t border-slate-100 transition hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/40"
-							>
-								<td class="px-3 py-2 font-medium">{grp.name}</td>
-								<td class="px-3 py-2">{grp.sort_order}</td>
-								<td class="px-3 py-2">
-									<span
-										class="rounded-full px-2 py-1 text-xs"
-										class:bg-emerald-100={grp.active}
-										class:text-emerald-700={grp.active}
-										class:bg-slate-200={!grp.active}
-										class:text-slate-600={!grp.active}
-										class:dark:bg-emerald-900={grp.active}
-										class:dark:text-emerald-200={grp.active}
-										class:dark:bg-slate-700={!grp.active}
-										class:dark:text-slate-400={!grp.active}
-									>
-										{grp.active ? 'Activo' : 'Inactivo'}
-									</span>
-								</td>
-								<td class="px-3 py-2">
-									<div class="flex gap-2">
-										<button class="btn-secondary !px-2 !py-1 text-xs" onclick={() => openEdit(grp)}>
-											Editar y agregar ítems
-										</button>
-										<button class="btn-danger !px-2 !py-1 text-xs" onclick={() => openDeleteConfirm(grp)}>
-											Eliminar
-										</button>
-									</div>
-								</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
-			<div class="mt-4 text-sm text-slate-500 dark:text-slate-400">
-				Mostrando 1–{groups.length} de {groups.length}
-			</div>
-		{/if}
+		<DataTable
+			tableId="groups"
+			data={groups}
+			columns={groupColumns}
+			rowId={(g) => g.id}
+			globalSearch={{ keys: ['name'], placeholder: 'Buscar por nombre' }}
+			actions={[
+				{ label: 'Editar y agregar ítems', onClick: openEdit, variant: 'secondary' },
+				{ label: 'Eliminar', onClick: openDeleteConfirm, variant: 'danger' }
+			]}
+			emptyMessage="Aún no hay grupos. Creá uno con «Nuevo grupo» (ej. Sabores)."
+			loading={loading}
+			persistState={true}
+		/>
 	</section>
 </div>
 

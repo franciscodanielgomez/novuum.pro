@@ -6,7 +6,13 @@ const customers = writable<Customer[]>([]);
 
 export const customersStore = {
 	subscribe: customers.subscribe,
-	load: async () => customers.set(await api.customers.list()),
+	load: async () => {
+		try {
+			customers.set(await api.customers.list());
+		} catch {
+			customers.set([]);
+		}
+	},
 	create: async (payload: Omit<Customer, 'id' | 'createdAt'>) => {
 		await api.customers.create(payload);
 		await customersStore.load();
