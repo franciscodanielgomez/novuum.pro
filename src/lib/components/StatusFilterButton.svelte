@@ -5,6 +5,7 @@
 	 */
 	export type StatusFilterValue =
 		| 'TODOS'
+		| 'BORRADOR'
 		| 'NO_ASIGNADO'
 		| 'ASIGNADO'
 		| 'COMPLETADO'
@@ -30,6 +31,12 @@
 				'bg-slate-800 text-white hover:bg-slate-700 shadow-sm ring-1 ring-slate-700 ring-offset-1 dark:bg-slate-600 dark:text-white dark:hover:bg-slate-500 dark:ring-slate-500',
 			inactive:
 				'border border-slate-400 text-slate-700 hover:bg-slate-100 dark:border-slate-500 dark:text-slate-300 dark:hover:bg-slate-700'
+		},
+		BORRADOR: {
+			active:
+				'bg-violet-600 text-white hover:bg-violet-700 shadow-sm ring-1 ring-violet-700 ring-offset-1 dark:bg-violet-700 dark:hover:bg-violet-600 dark:ring-violet-600',
+			inactive:
+				'border border-violet-500 text-violet-600 hover:bg-violet-50 dark:border-violet-500 dark:text-violet-400 dark:hover:bg-violet-900/30'
 		},
 		NO_ASIGNADO: {
 			active:
@@ -59,6 +66,7 @@
 
 	const LABELS: Record<StatusFilterValue, string> = {
 		TODOS: 'Todos',
+		BORRADOR: 'Borrador',
 		NO_ASIGNADO: 'No asignado',
 		ASIGNADO: 'Asignado',
 		COMPLETADO: 'Completado',

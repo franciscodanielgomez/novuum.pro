@@ -119,29 +119,14 @@
 		void loadCategories();
 	});
 
-	const activeCount = $derived(categories.filter((c) => c.active).length);
 </script>
 
 <div class="space-y-4">
-	<div class="panel flex items-center justify-between p-4">
-		<div>
-			<h1 class="text-base font-semibold">Categorías</h1>
-			<p class="text-xs text-slate-500 dark:text-slate-400">
-				Organizá los productos por tipo (bebidas, comidas, etc.) y orden de aparición.
-			</p>
-		</div>
-		<button class="btn-primary" onclick={openCreate}>+ Nueva categoría</button>
-	</div>
-
-	<div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-		<div class="panel p-4">
-			<p class="text-sm text-slate-500 dark:text-slate-400">Total categorías</p>
-			<p class="mt-1 text-4xl font-semibold">{categories.length}</p>
-		</div>
-		<div class="panel p-4">
-			<p class="text-sm text-slate-500 dark:text-slate-400">Activas</p>
-			<p class="mt-1 text-4xl font-semibold">{activeCount}</p>
-		</div>
+	<div class="panel p-4">
+		<h1 class="text-base font-semibold">Categorías</h1>
+		<p class="text-xs text-slate-500 dark:text-slate-400">
+			Organizá los productos por tipo (bebidas, comidas, etc.) y orden de aparición.
+		</p>
 	</div>
 
 	<section class="panel p-4">
@@ -157,7 +142,11 @@
 			emptyMessage="Aún no hay categorías. Creá una con «Nueva categoría»."
 			loading={loading}
 			persistState={true}
-		/>
+		>
+			{#snippet toolbarActions()}
+				<button type="button" class="btn-primary" onclick={openCreate}>+ Nueva categoría</button>
+			{/snippet}
+		</DataTable>
 	</section>
 </div>
 

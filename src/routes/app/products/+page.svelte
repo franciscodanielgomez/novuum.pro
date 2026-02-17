@@ -270,6 +270,8 @@
 
 	const totalRevenue = $derived(products.reduce((acc, p) => acc + getProductPrice(p), 0));
 	const totalSold = $derived(useSupabase ? 0 : storeProducts.reduce((acc, p, i) => acc + buildMeta(p as unknown as (typeof products)[number], i).sales, 0));
+	const activeProductsCount = $derived(products.filter((p) => p.active).length);
+	const inactiveProductsCount = $derived(products.filter((p) => !p.active).length);
 	const allSelected = $derived(totalProducts > 0 && selectedProductIds.length === totalProducts);
 
 	const getProductCategoryIds = (p: SupabaseProduct): string[] =>
@@ -617,33 +619,25 @@
 </script>
 
 <div class="space-y-4">
-	<div class="panel flex items-center justify-between p-4">
-		<div>
-			<h1 class="text-base font-semibold">Productos</h1>
-			<p class="text-xs text-slate-500 dark:text-slate-400">
-				Catálogo de productos, precios, categorías y grupos (sabores, opciones).
-			</p>
-		</div>
-		<div class="flex items-center gap-2">
-			<button class="btn-primary" onclick={openNewProduct}>+ Nuevo producto</button>
-			<button class="btn-secondary !px-2 !py-1" title="Filtros">⚙</button>
-			<button class="btn-secondary !px-2 !py-1" title="Ordenar">⇅</button>
-			<button class="btn-secondary !px-2 !py-1" title="Columnas">☰</button>
-		</div>
+	<div class="panel p-4">
+		<h1 class="text-base font-semibold">Productos</h1>
+		<p class="text-xs text-slate-500 dark:text-slate-400">
+			Catálogo de productos, precios, categorías y grupos (sabores, opciones).
+		</p>
 	</div>
 
 	<div class="grid grid-cols-1 gap-4 md:grid-cols-3">
 		<div class="panel p-4">
-			<p class="text-sm text-slate-500 dark:text-neutral-400">Total Product</p>
+			<p class="text-sm text-slate-500 dark:text-neutral-400">Total de productos</p>
 			<p class="mt-1 text-4xl font-semibold">{totalProducts}</p>
 		</div>
 		<div class="panel p-4">
-			<p class="text-sm text-slate-500 dark:text-neutral-400">Product Revenue</p>
-			<p class="mt-1 text-4xl font-semibold">{formatMoney(totalRevenue)}</p>
+			<p class="text-sm text-slate-500 dark:text-neutral-400">Activos</p>
+			<p class="mt-1 text-4xl font-semibold">{activeProductsCount}</p>
 		</div>
 		<div class="panel p-4">
-			<p class="text-sm text-slate-500 dark:text-neutral-400">Product Sold</p>
-			<p class="mt-1 text-4xl font-semibold">{totalSold}</p>
+			<p class="text-sm text-slate-500 dark:text-neutral-400">Inactivos</p>
+			<p class="mt-1 text-4xl font-semibold">{inactiveProductsCount}</p>
 		</div>
 	</div>
 
@@ -655,23 +649,28 @@
 				No hay productos. Creá uno con «+ Add New Product».
 			</p>
 		{:else}
-			<!-- Búsqueda global: nombre, descripción, categoría. Al cambiar, resetear página. -->
+			<!-- Búsqueda global y botón Nuevo producto (alineado a la derecha, como en Clientes/Grupos). -->
 			{#if browser}
-				<div class="mb-4">
-					<label for="products-search" class="block text-sm font-medium text-slate-700 dark:text-neutral-300">Buscar</label>
-					<input
-						id="products-search"
-						type="search"
-						class="input mt-1 max-w-md"
-						placeholder="Nombre, descripción o categoría…"
-						aria-label="Buscar productos"
-						value={searchQuery}
-						oninput={(e) => {
-							searchQuery = (e.currentTarget as HTMLInputElement).value;
-							pageIndex = 0;
-							persistProductsTable();
-						}}
-					/>
+				<div class="mb-4 flex flex-wrap items-end gap-3">
+					<div>
+						<label for="products-search" class="block text-sm font-medium text-slate-700 dark:text-neutral-300">Buscar</label>
+						<input
+							id="products-search"
+							type="search"
+							class="input mt-1 max-w-md"
+							placeholder="Nombre, descripción o categoría…"
+							aria-label="Buscar productos"
+							value={searchQuery}
+							oninput={(e) => {
+								searchQuery = (e.currentTarget as HTMLInputElement).value;
+								pageIndex = 0;
+								persistProductsTable();
+							}}
+						/>
+					</div>
+					<div class="ml-auto shrink-0">
+						<button type="button" class="btn-primary" onclick={openNewProduct}>+ Nuevo producto</button>
+					</div>
 				</div>
 			{/if}
 

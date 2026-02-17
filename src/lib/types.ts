@@ -1,5 +1,5 @@
 export type StaffRole = 'CAJERO' | 'CADETE' | 'ADMINISTRADOR' | 'GESTOR';
-export type OrderStatus = 'NO_ASIGNADO' | 'ASIGNADO' | 'COMPLETADO' | 'CANCELADO';
+export type OrderStatus = 'BORRADOR' | 'NO_ASIGNADO' | 'ASIGNADO' | 'COMPLETADO' | 'CANCELADO';
 export type PaymentMethod = 'CASH' | 'MP' | 'TRANSFER';
 export type ShiftTurn = 'MAÑANA' | 'TARDE' | 'NOCHE';
 
@@ -18,6 +18,21 @@ export type Staff = {
 	email?: string;
 	phone?: string;
 	role: StaffRole;
+	/** Varios roles (en UI multiselect). Si está vacío se usa role. */
+	roles?: StaffRole[];
+	active: boolean;
+};
+
+/** Miembro del equipo sin cuenta (no tiene email/contraseña) */
+export type StaffGuest = {
+	id: string;
+	name: string;
+	role: StaffRole;
+	/** Varios roles (en UI multiselect). Si está vacío se usa role. */
+	roles?: StaffRole[];
+	/** Email de contacto (opcional). */
+	email?: string;
+	phone?: string;
 	active: boolean;
 };
 
@@ -59,6 +74,26 @@ export type OrderItem = {
 	}>;
 };
 
+/** Borrador de pedido en la pantalla Crear pedido (cards en curso) */
+export type OrderDraft = {
+	id: string;
+	title: string;
+	selectedCustomerId: string | null;
+	categoryId: string;
+	cart: OrderItem[];
+	paymentMethod: PaymentMethod;
+	cashReceived: number;
+	/** Costo de envío (delivery) */
+	deliveryCost: number;
+	notes: string;
+	createdAt?: string;
+	customerPhoneSnapshot?: string;
+	addressSnapshot?: string;
+	betweenStreetsSnapshot?: string;
+	/** ID del pedido BORRADOR en el repo (localStorage) */
+	orderId?: string;
+};
+
 export type Order = {
 	id: string;
 	createdAt: string;
@@ -69,6 +104,7 @@ export type Order = {
 	betweenStreetsSnapshot?: string;
 	status: OrderStatus;
 	assignedStaffId?: string;
+	assignedStaffGuestId?: string;
 	paymentMethod: PaymentMethod;
 	cashReceived?: number;
 	changeDue?: number;

@@ -3,6 +3,7 @@
 	export let status: OrderStatus;
 
 	const labels: Record<OrderStatus, string> = {
+		BORRADOR: 'Borrador',
 		NO_ASIGNADO: 'No asignado',
 		ASIGNADO: 'Asignado',
 		COMPLETADO: 'Completado',
@@ -12,6 +13,8 @@
 
 <span
 	class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium"
+	class:bg-violet-100={status === 'BORRADOR'}
+	class:text-violet-800={status === 'BORRADOR'}
 	class:bg-rose-100={status === 'NO_ASIGNADO'}
 	class:text-rose-800={status === 'NO_ASIGNADO'}
 	class:bg-amber-100={status === 'ASIGNADO'}

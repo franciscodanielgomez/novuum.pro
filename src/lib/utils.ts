@@ -20,4 +20,15 @@ export const sameDate = (a: string, yyyyMmDd: string) => a.slice(0, 10) === yyyy
 
 export const todayYmd = () => new Date().toISOString().slice(0, 10);
 
+/** Formato dd/MM/yyyy - HH:mm para listados */
+export const formatDateTime = (iso: string) => {
+	const d = new Date(iso);
+	const day = String(d.getDate()).padStart(2, '0');
+	const month = String(d.getMonth() + 1).padStart(2, '0');
+	const year = d.getFullYear();
+	const h = String(d.getHours()).padStart(2, '0');
+	const m = String(d.getMinutes()).padStart(2, '0');
+	return `${day}/${month}/${year} - ${h}:${m}`;
+};
+
 export const isBrowser = () => browser;

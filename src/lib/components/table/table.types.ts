@@ -1,4 +1,5 @@
 import type { ColumnDef, SortingState } from '@tanstack/table-core';
+import type { Snippet } from 'svelte';
 
 export interface DataTableColumn<TData, TValue = unknown> {
 	id: string;
@@ -81,12 +82,16 @@ export interface DataTableProps<TData> {
 	globalSearch?: GlobalSearchConfig<TData>;
 	filters?: DataTableFilter<TData>[];
 	actions?: DataTableAction<TData>[];
+	/** Si es true, las acciones se muestran en un menú desplegable con icono de tres puntos */
+	actionsAsDropdown?: boolean;
 	initialState?: DataTableInitialState;
 	enableVirtualization?: boolean;
 	pageSizeOptions?: number[];
 	loading?: boolean;
 	emptyMessage?: string;
 	persistState?: boolean;
+	/** Contenido extra en la barra de herramientas (a la izquierda de Columnas). */
+	toolbarActions?: Snippet;
 }
 
 export type { ColumnDef, SortingState };

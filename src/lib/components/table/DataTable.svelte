@@ -34,11 +34,13 @@
 		globalSearch,
 		filters = [],
 		actions = [],
+		actionsAsDropdown = false,
 		initialState = {},
 		pageSizeOptions = [10, 20, 50, 100],
 		loading = false,
 		emptyMessage = 'Sin resultados',
-		persistState = true
+		persistState = true,
+		toolbarActions
 	}: Props = $props();
 
 	// Use only initialState for first render so server and client match (no localStorage during SSR).
@@ -59,6 +61,10 @@
 	let columnVisibility = $state<Record<string, boolean>>(defaultColumnVisibility);
 	let columnOrder = $state<string[] | undefined>(defaultColumnOrder);
 	let sorting = $state(defaultSorting);
+	/** ID de la fila cuyo menú de acciones está abierto (cuando actionsAsDropdown) */
+	let actionsMenuOpenId = $state<string | null>(null);
+	/** Posición y datos del menú para renderizarlo con position:fixed y que no se recorte por overflow */
+	let actionsMenuState = $state<{ row: TData; top: number; left: number } | null>(null);
 	let pagination = $state({
 		pageIndex: 0,
 		pageSize: defaultPageSize
@@ -312,6 +318,9 @@
 		{/each}
 
 		<div class="ml-auto flex items-center gap-2">
+			{#if toolbarActions}
+				{@render toolbarActions()}
+			{/if}
 			<!-- Column visibility -->
 			<div class="relative" role="group" aria-label="Columnas visibles">
 				<button
@@ -401,41 +410,74 @@
 						<tr class="border-t border-slate-100 hover:bg-slate-50 dark:border-neutral-800 dark:hover:bg-slate-800/40">
 							{#each row.getVisibleCells() as cell}
 								{#if cell.column.id === '__actions__'}
-									<td class="px-3 py-2 text-right">
-										<div class="flex flex-wrap items-center justify-end gap-1">
-											{#each actions as action}
-												{@const variant = action.variant ?? 'default'}
+									<td class="relative px-3 py-2 text-right">
+										{#if actionsAsDropdown && actions.length > 0}
+											<div class="relative inline-block">
 												<button
 													type="button"
-													title={action.label}
-													aria-label={action.label}
-													class="inline-flex h-8 w-8 items-center justify-center rounded border transition {variant === 'success'
-														? 'border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700'
-														: variant === 'danger'
-															? 'border-red-300 bg-red-600 text-white hover:bg-red-700'
-															: variant === 'secondary'
-																? 'border-slate-200 text-slate-600 hover:bg-slate-100 dark:border-neutral-600 dark:text-neutral-300 dark:hover:bg-neutral-800'
-																: 'border-slate-300 text-slate-700 hover:bg-slate-100'}"
-													onclick={() => action.onClick(row.original as TData)}
+													title="Acciones"
+													aria-label="Abrir menú de acciones"
+													aria-expanded={actionsMenuOpenId === rowId(row.original as TData)}
+													class="inline-flex h-8 w-8 items-center justify-center rounded border border-slate-200 text-slate-600 hover:bg-slate-100 dark:border-neutral-600 dark:text-neutral-300 dark:hover:bg-neutral-800"
+													onclick={(e) => {
+														const id = rowId(row.original as TData);
+														if (actionsMenuOpenId === id) {
+															actionsMenuOpenId = null;
+															actionsMenuState = null;
+															return;
+														}
+														const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+														actionsMenuOpenId = id;
+														actionsMenuState = {
+															row: row.original as TData,
+															top: rect.bottom + 4,
+															left: Math.max(8, rect.right - 160)
+														};
+													}}
 												>
-													{#if action.icon === 'edit'}
-														<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
-															<path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-														</svg>
-													{:else if action.icon === 'trash'}
-														<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
-															<path stroke-linecap="round" stroke-linejoin="round" d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m-3 0h6" />
-														</svg>
-													{:else if action.icon === 'plus'}
-														<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
-															<path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
-														</svg>
-													{:else}
-														<span class="text-xs">{action.label}</span>
-													{/if}
+													<svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+														<circle cx="12" cy="6" r="1.5" />
+														<circle cx="12" cy="12" r="1.5" />
+														<circle cx="12" cy="18" r="1.5" />
+													</svg>
 												</button>
-											{/each}
-										</div>
+											</div>
+										{:else}
+											<div class="flex flex-wrap items-center justify-end gap-1">
+												{#each actions as action}
+													{@const variant = action.variant ?? 'default'}
+													<button
+														type="button"
+														title={action.label}
+														aria-label={action.label}
+														class="inline-flex h-8 w-8 items-center justify-center rounded border transition {variant === 'success'
+															? 'border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700'
+															: variant === 'danger'
+																? 'border-red-300 bg-red-600 text-white hover:bg-red-700'
+																: variant === 'secondary'
+																	? 'border-slate-200 text-slate-600 hover:bg-slate-100 dark:border-neutral-600 dark:text-neutral-300 dark:hover:bg-neutral-800'
+																	: 'border-slate-300 text-slate-700 hover:bg-slate-100'}"
+														onclick={() => action.onClick(row.original as TData)}
+													>
+														{#if action.icon === 'edit'}
+															<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+																<path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+															</svg>
+														{:else if action.icon === 'trash'}
+															<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+																<path stroke-linecap="round" stroke-linejoin="round" d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m-3 0h6" />
+															</svg>
+														{:else if action.icon === 'plus'}
+															<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+																<path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+															</svg>
+														{:else}
+															<span class="text-xs">{action.label}</span>
+														{/if}
+													</button>
+												{/each}
+											</div>
+										{/if}
 									</td>
 								{:else}
 									<td class="whitespace-nowrap px-3 py-2">{cell.getValue() != null ? String(cell.getValue()) : '—'}</td>
@@ -447,6 +489,40 @@
 			</tbody>
 		</table>
 	</div>
+
+	{#if actionsAsDropdown && actionsMenuState}
+		<button
+			type="button"
+			class="fixed inset-0 z-30 cursor-default"
+			aria-label="Cerrar menú"
+			onclick={() => {
+				actionsMenuOpenId = null;
+				actionsMenuState = null;
+			}}
+		></button>
+		<div
+			class="fixed z-40 min-w-[160px] rounded-lg border border-slate-200 bg-white py-1 shadow-lg dark:border-neutral-700 dark:bg-neutral-800"
+			role="menu"
+			style="top: {actionsMenuState.top}px; left: {actionsMenuState.left}px;"
+		>
+			{#each actions as action}
+				<button
+					type="button"
+					class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-neutral-700 {action.variant === 'danger'
+						? 'text-rose-600 dark:text-rose-400'
+						: ''}"
+					role="menuitem"
+					onclick={() => {
+						action.onClick(actionsMenuState!.row);
+						actionsMenuOpenId = null;
+						actionsMenuState = null;
+					}}
+				>
+					{action.label}
+				</button>
+			{/each}
+		</div>
+	{/if}
 
 	<div class="mt-4">
 		<DataTablePaginator

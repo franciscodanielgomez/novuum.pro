@@ -3,11 +3,13 @@ import { customersRepo } from '$lib/repo/customersRepo';
 import { ordersRepo } from '$lib/repo/ordersRepo';
 import { shiftsRepo } from '$lib/repo/shiftsRepo';
 import { staffRepo } from '$lib/repo/staffRepo';
+import { staffGuestsRepo } from '$lib/repo/staffGuestsRepo';
 import type { Order, OrderStatus, Shift } from '$lib/types';
 
 export const api = {
 	customers: customersRepo,
 	staff: staffRepo,
+	staffGuests: staffGuestsRepo,
 	catalog: catalogRepo,
 	orders: {
 		list: () => ordersRepo.list(),
@@ -15,7 +17,9 @@ export const api = {
 		create: (payload: Omit<Order, 'id' | 'createdAt' | 'hour'>) => ordersRepo.create(payload),
 		update: (id: string, payload: Partial<Order>) => ordersRepo.update(id, payload),
 		updateStatus: (id: string, status: OrderStatus) => ordersRepo.updateStatus(id, status),
-		assign: (id: string, staffId: string) => ordersRepo.assign(id, staffId)
+		assign: (id: string, staffId: string) => ordersRepo.assign(id, staffId),
+		assignGuest: (id: string, staffGuestId: string) => ordersRepo.assignGuest(id, staffGuestId),
+		delete: (id: string) => ordersRepo.delete(id)
 	},
 	shifts: {
 		list: () => shiftsRepo.list(),

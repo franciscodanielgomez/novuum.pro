@@ -86,14 +86,11 @@
 </script>
 
 <div class="space-y-4">
-	<div class="panel flex items-center justify-between p-4">
-		<div>
-			<h1 class="text-base font-semibold">Clientes</h1>
-			<p class="text-xs text-slate-500 dark:text-slate-400">
-				Teléfono, dirección y datos de entrega para los pedidos.
-			</p>
-		</div>
-		<button class="btn-primary" onclick={openNew}>Nuevo cliente</button>
+	<div class="panel p-4">
+		<h1 class="text-base font-semibold">Clientes</h1>
+		<p class="text-xs text-slate-500 dark:text-slate-400">
+			Teléfono, dirección y datos de entrega para los pedidos.
+		</p>
 	</div>
 
 	<div class="panel p-4">
@@ -110,7 +107,11 @@
 			emptyMessage="No hay clientes. Creá uno con «Nuevo cliente»."
 			loading={loading}
 			persistState={true}
-		/>
+		>
+			{#snippet toolbarActions()}
+				<button type="button" class="btn-primary" onclick={openNew}>Nuevo cliente</button>
+			{/snippet}
+		</DataTable>
 	</div>
 </div>
 

@@ -272,8 +272,6 @@
 		void loadGroups();
 	});
 
-	const activeCount = $derived(groups.filter((g) => g.active).length);
-
 	const groupColumns: DataTableColumn<Group>[] = [
 		{ id: 'name', header: 'Nombre', accessorKey: 'name' },
 		{ id: 'sort_order', header: 'Orden', accessorKey: 'sort_order' },
@@ -282,25 +280,11 @@
 </script>
 
 <div class="space-y-4">
-	<div class="panel flex items-center justify-between p-4">
-		<div>
-			<h1 class="text-base font-semibold">Grupos</h1>
-			<p class="text-xs text-slate-500 dark:text-slate-400">
-				Grupos de opciones por producto (sabores, tamaños, extras) y sus ítems.
-			</p>
-		</div>
-		<button class="btn-primary" onclick={openCreate}>+ Nuevo grupo</button>
-	</div>
-
-	<div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-		<div class="panel p-4">
-			<p class="text-sm text-slate-500 dark:text-slate-400">Total grupos</p>
-			<p class="mt-1 text-4xl font-semibold">{groups.length}</p>
-		</div>
-		<div class="panel p-4">
-			<p class="text-sm text-slate-500 dark:text-slate-400">Activos</p>
-			<p class="mt-1 text-4xl font-semibold">{activeCount}</p>
-		</div>
+	<div class="panel p-4">
+		<h1 class="text-base font-semibold">Grupos</h1>
+		<p class="text-xs text-slate-500 dark:text-slate-400">
+			Grupos de opciones por producto (sabores, tamaños, extras) y sus ítems.
+		</p>
 	</div>
 
 	<section class="panel p-4">
@@ -316,7 +300,11 @@
 			emptyMessage="Aún no hay grupos. Creá uno con «Nuevo grupo» (ej. Sabores)."
 			loading={loading}
 			persistState={true}
-		/>
+		>
+			{#snippet toolbarActions()}
+				<button type="button" class="btn-primary" onclick={openCreate}>+ Nuevo grupo</button>
+			{/snippet}
+		</DataTable>
 	</section>
 </div>
 

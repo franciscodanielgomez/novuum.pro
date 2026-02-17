@@ -39,8 +39,15 @@ const mapUser = async (user: User | null): Promise<AppUser | null> => {
 	let role: AppUser['role'] = 'CAJERO';
 	let displayName = ((user.user_metadata?.name as string | undefined) ?? '').trim();
 	let avatarUrl = ((user.user_metadata?.avatar_url as string | undefined) ?? '').trim();
-	const { data } = await supabase.from('team_members').select('role').eq('id', user.id).maybeSingle();
-	if (data?.role) role = mapLegacyRole(data.role);
+	const { data } = await supabase.from('team_members').select('role, roles').eq('id', user.id).maybeSingle();
+	if (data) {
+		const rolesArr = Array.isArray((data as { roles?: string[] }).roles) && (data as { roles?: string[] }).roles!.length > 0
+			? (data as { roles: string[] }).roles
+			: [(data as { role?: string }).role].filter(Boolean) as string[];
+		if (rolesArr.includes('ADMINISTRADOR')) role = 'ADMINISTRADOR';
+		else if (rolesArr.length > 0) role = mapLegacyRole(rolesArr[0]);
+		else if (data.role) role = mapLegacyRole(data.role);
+	}
 	const { data: profileData } = await supabase
 		.from('user_profiles')
 		.select('first_name, last_name, avatar_url')

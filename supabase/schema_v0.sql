@@ -13,7 +13,7 @@ end $$;
 do $$
 begin
   if not exists (select 1 from pg_type where typname = 'order_status') then
-    create type public.order_status as enum ('NO_ASIGNADO', 'ASIGNADO', 'COMPLETADO', 'CANCELADO');
+    create type public.order_status as enum ('BORRADOR', 'NO_ASIGNADO', 'ASIGNADO', 'COMPLETADO', 'CANCELADO');
   end if;
 end $$;
 
@@ -84,6 +84,16 @@ create table if not exists public.customers (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.staff_guests (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  role public.team_role not null default 'CAJERO',
+  phone text,
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists public.products (
   id uuid primary key default gen_random_uuid(),
   category text not null,
@@ -103,6 +113,7 @@ create table if not exists public.orders (
   between_streets_snapshot text,
   status public.order_status not null default 'NO_ASIGNADO',
   assigned_staff_id uuid references public.team_members(id),
+  assigned_staff_guest_id uuid references public.staff_guests(id),
   payment_method public.payment_method not null default 'CASH',
   cash_received numeric(12,2),
   change_due numeric(12,2),
@@ -189,6 +200,7 @@ alter table public.team_members enable row level security;
 alter table public.user_profiles enable row level security;
 alter table public.user_addresses enable row level security;
 alter table public.customers enable row level security;
+alter table public.staff_guests enable row level security;
 alter table public.products enable row level security;
 alter table public.orders enable row level security;
 alter table public.order_items enable row level security;
@@ -211,6 +223,9 @@ for select to authenticated using (true);
 drop policy if exists "only admin updates team" on public.team_members;
 create policy "only admin updates team" on public.team_members
 for update to authenticated using (public.is_admin()) with check (public.is_admin());
+drop policy if exists "team members can update own" on public.team_members;
+create policy "team members can update own" on public.team_members
+for update to authenticated using (id = auth.uid()) with check (id = auth.uid());
 
 drop policy if exists "user profiles select own" on public.user_profiles;
 create policy "user profiles select own" on public.user_profiles
@@ -258,14 +273,27 @@ drop policy if exists "crud customers authenticated" on public.customers;
 create policy "crud customers authenticated" on public.customers
 for all to authenticated using (true) with check (true);
 
+drop policy if exists "staff_guests select anon" on public.staff_guests;
+create policy "staff_guests select anon" on public.staff_guests for select to anon using (true);
+drop policy if exists "crud staff_guests authenticated" on public.staff_guests;
+create policy "staff_guests select authenticated" on public.staff_guests for select to authenticated using (true);
+create policy "staff_guests insert admin only" on public.staff_guests for insert to authenticated with check (public.is_admin());
+create policy "staff_guests update admin only" on public.staff_guests for update to authenticated using (public.is_admin()) with check (public.is_admin());
+create policy "staff_guests delete admin only" on public.staff_guests for delete to authenticated using (public.is_admin());
+
 drop policy if exists "crud products authenticated" on public.products;
 create policy "crud products authenticated" on public.products
 for all to authenticated using (true) with check (true);
 
+-- Todos los usuarios pueden ver pedidos: anon y authenticated. Crear/editar solo authenticated.
+drop policy if exists "orders select all" on public.orders;
+create policy "orders select all" on public.orders for select to anon using (true);
 drop policy if exists "crud orders authenticated" on public.orders;
 create policy "crud orders authenticated" on public.orders
 for all to authenticated using (true) with check (true);
 
+drop policy if exists "order_items select all" on public.order_items;
+create policy "order_items select all" on public.order_items for select to anon using (true);
 drop policy if exists "crud order_items authenticated" on public.order_items;
 create policy "crud order_items authenticated" on public.order_items
 for all to authenticated using (true) with check (true);

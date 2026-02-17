@@ -12,7 +12,7 @@
 	let includeNonCompleted = false;
 
 	$: cashiers = $staffStore.filter(
-		(s) => s.active && (s.role === 'CAJERO' || s.role === 'ADMINISTRADOR' || s.role === 'GESTOR')
+		(s) => s.active && (s.roles ?? [s.role]).some((r) => r === 'CAJERO' || r === 'ADMINISTRADOR' || r === 'GESTOR')
 	);
 	$: currentShift = $shiftsStore;
 	$: shiftOrders = currentShift
