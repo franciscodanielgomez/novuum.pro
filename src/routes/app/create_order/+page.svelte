@@ -6,6 +6,8 @@
 		type ProductOption as ConfigOption,
 		type ProductOptionGroup
 	} from '$lib/schema/product-options';
+	import { customerSchema } from '$lib/schemas';
+	import { supabase } from '$lib/supabase/client';
 	import { catalogStore } from '$lib/stores/catalog';
 	import { customersStore } from '$lib/stores/customers';
 	import { ordersStore } from '$lib/stores/orders';
@@ -16,6 +18,8 @@
 	import { fromZustand } from '$lib/stores/zustandBridge';
 	import type { Customer, OrderItem, PaymentMethod, Product, SKU } from '$lib/types';
 	import { generateId, formatMoney } from '$lib/utils';
+	import { page } from '$app/stores';
+	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 
 	type OrderDraft = {
@@ -30,17 +34,66 @@
 	};
 
 	let draftCount = 1;
-	let drafts: OrderDraft[] = [];
-	let activeDraftId = '';
-	let productSearch = '';
-	let productsViewMode: 'cards' | 'list' = 'cards';
-	let configOpen = false;
-	let configError = '';
+	let drafts = $state<OrderDraft[]>([]);
+	let activeDraftId = $state('');
+	let productSearch = $state('');
+	let productsViewMode = $state<'cards' | 'list'>('cards');
+	let clientModalOpen = $state(false);
+	/** true = cambiar cliente del draft actual; false = crear nuevo draft con el cliente */
+	let clientModalForChange = $state(false);
+	let clientSearch = $state('');
+	let addClientMode = $state(false);
+	let newClientForm = $state({ phone: '', address: '', betweenStreets: '', notes: '' });
+	let configOpen = $state(false);
+	let configLoading = $state(false);
+	let configError = $state('');
 	let configTarget: { sku: SKU; product: Product } | null = null;
 	let configGroups: ProductOptionGroup[] = [];
+	/** Opciones por grupo cuando se cargan desde Supabase (product_group_items) */
+	let supabaseOptionsByGroup = $state<Record<string, ConfigOption[]>>({});
 	let selectionsByGroup: Record<string, string[]> = {};
 	let optionQtyById: Record<string, number> = {};
 	const productsOptionsState = fromZustand(productsStore);
+
+	// Catálogo desde Supabase (categorías + productos) para filtrar por categoría, no por grupo
+	type SupabaseCategory = { id: string; name: string; sort_order: number };
+	type SupabaseProductRow = {
+		id: string;
+		name: string;
+		description: string;
+		price: number;
+		image_url?: string | null;
+		product_categories?: { category_id: string }[];
+	};
+	let supabaseCategories = $state<SupabaseCategory[]>([]);
+	let supabaseProductsRaw = $state<SupabaseProductRow[]>([]);
+	const loadSupabaseCatalog = async () => {
+		const [catRes, prodRes] = await Promise.all([
+			supabase.from('categories').select('id, name, sort_order').eq('active', true).order('sort_order', { ascending: true }),
+			supabase.from('products').select('id, name, description, price, image_url, product_categories(category_id)').eq('active', true).order('name', { ascending: true })
+		]);
+		if (!catRes.error && catRes.data) supabaseCategories = catRes.data as SupabaseCategory[];
+		if (!prodRes.error && prodRes.data) supabaseProductsRaw = prodRes.data as SupabaseProductRow[];
+	};
+	const useSupabaseCatalog = $derived(supabaseCategories.length > 0 && supabaseProductsRaw.length > 0);
+	const supabaseProductsAsCatalog = $derived(
+		supabaseProductsRaw.map((p) => ({
+			id: p.id,
+			name: p.name,
+			description: p.description ?? '',
+			imageUrl: p.image_url ?? undefined,
+			categoryId: (p.product_categories ?? [])[0]?.category_id ?? '',
+			categoryIds: (p.product_categories ?? []).map((pc) => pc.category_id)
+		}))
+	);
+	const supabaseSkus = $derived(
+		supabaseProductsRaw.map((p) => ({
+			id: p.id,
+			productId: p.id,
+			label: 'Unidad',
+			price: p.price
+		}))
+	);
 
 	const createDraft = (index: number): OrderDraft => ({
 		id: generateId('draft'),
@@ -61,25 +114,102 @@
 		drafts = drafts.map((draft) => (draft.id === id ? updater(draft) : draft));
 	};
 
-	$: activeDraft = drafts.find((d) => d.id === activeDraftId) ?? null;
-	$: categories = $catalogStore.categories;
-	$: products = $catalogStore.products.filter((p) => {
-		const selectedCategory = activeDraft?.categoryId ?? 'all';
-		if (selectedCategory !== 'all' && p.categoryId !== selectedCategory) return false;
-		if (!productSearch.trim()) return true;
-		const txt = `${p.name} ${p.description}`.toLowerCase();
-		return txt.includes(productSearch.toLowerCase());
-	});
-	$: selectedCustomer = activeDraft
-		? ($customersStore.find((c) => c.id === activeDraft.selectedCustomerId) ?? null)
-		: null;
-	$: total = activeDraft ? activeDraft.cart.reduce((acc, item) => acc + item.subtotal, 0) : 0;
-	$: changeDue =
-		activeDraft && activeDraft.paymentMethod === 'CASH' ? Math.max(0, activeDraft.cashReceived - total) : 0;
+	const activeDraft = $derived(drafts.find((d) => d.id === activeDraftId) ?? null);
+	const categories = $derived(
+		useSupabaseCatalog
+			? supabaseCategories.map((c) => ({ id: c.id, name: c.name, sort: c.sort_order })).sort((a, b) => a.sort - b.sort)
+			: $catalogStore.categories
+	);
+	const products = $derived(
+		useSupabaseCatalog
+			? supabaseProductsAsCatalog.filter((p) => {
+					const selectedCategory = activeDraft?.categoryId ?? 'all';
+					if (selectedCategory !== 'all' && !(p as { categoryIds?: string[] }).categoryIds?.includes(selectedCategory))
+						return false;
+					if (!productSearch.trim()) return true;
+					const txt = `${p.name} ${p.description}`.toLowerCase();
+					return txt.includes(productSearch.toLowerCase());
+				})
+			: $catalogStore.products.filter((p) => {
+					const selectedCategory = activeDraft?.categoryId ?? 'all';
+					if (selectedCategory !== 'all' && p.categoryId !== selectedCategory) return false;
+					if (!productSearch.trim()) return true;
+					const txt = `${p.name} ${p.description}`.toLowerCase();
+					return txt.includes(productSearch.toLowerCase());
+				})
+	);
+	const selectedCustomer = $derived(
+		activeDraft ? ($customersStore.find((c) => c.id === activeDraft.selectedCustomerId) ?? null) : null
+	);
+	const total = $derived(activeDraft ? activeDraft.cart.reduce((acc, item) => acc + item.subtotal, 0) : 0);
+	const changeDue = $derived(
+		activeDraft && activeDraft.paymentMethod === 'CASH' ? Math.max(0, activeDraft.cashReceived - total) : 0
+	);
 
 	const draftCustomer = (draft: OrderDraft) =>
 		$customersStore.find((c) => c.id === draft.selectedCustomerId) ?? null;
 	const draftTotal = (draft: OrderDraft) => draft.cart.reduce((acc, item) => acc + item.subtotal, 0);
+
+	const filteredClients = $derived(
+		$customersStore.filter((c) => {
+			const q = clientSearch.trim().toLowerCase();
+			if (!q) return true;
+			return (
+				c.phone.toLowerCase().includes(q) ||
+				c.address.toLowerCase().includes(q) ||
+				(c.betweenStreets ?? '').toLowerCase().includes(q)
+			);
+		})
+	);
+
+	/** Cliente existente con el mismo teléfono al agregar uno nuevo */
+	const existingCustomerWithPhone = $derived(
+		newClientForm.phone.replace(/\D/g, '').length >= 6
+			? $customersStore.find((c) => c.phone.replace(/\D/g, '') === newClientForm.phone.replace(/\D/g, ''))
+			: null
+	);
+
+	const openClientModal = (forChange = false) => {
+		clientSearch = '';
+		addClientMode = false;
+		clientModalForChange = forChange;
+		newClientForm = { phone: '', address: '', betweenStreets: '', notes: '' };
+		clientModalOpen = true;
+	};
+
+	const selectClient = (customer: Customer) => {
+		if (clientModalForChange && activeDraft) {
+			updateActiveDraft((draft) => ({ ...draft, selectedCustomerId: customer.id }));
+			clientModalOpen = false;
+			clientModalForChange = false;
+			return;
+		}
+		draftCount += 1;
+		const newDraft = createDraft(draftCount);
+		newDraft.selectedCustomerId = customer.id;
+		drafts = [...drafts, { ...newDraft, selectedCustomerId: customer.id }];
+		activeDraftId = newDraft.id;
+		clientModalOpen = false;
+	};
+
+	const addNewClient = async () => {
+		if (existingCustomerWithPhone) {
+			toastsStore.error('Ya existe un cliente con este teléfono. Usá el botón «Usar este cliente».');
+			return;
+		}
+		const parsed = customerSchema.safeParse(newClientForm);
+		if (!parsed.success) {
+			toastsStore.error(parsed.error.issues[0]?.message ?? 'Datos inválidos');
+			return;
+		}
+		try {
+			const created = await customersStore.create(parsed.data);
+			toastsStore.success('Cliente creado');
+			selectClient(created);
+		} catch {
+			toastsStore.error('No se pudo crear el cliente');
+		}
+	};
 	const qtyBySku = (skuId: string) => activeDraft?.cart.find((item) => item.skuId === skuId)?.qty ?? 0;
 
 	const decSku = (sku: SKU) => {
@@ -90,10 +220,14 @@
 	};
 
 	const findSkusByProduct = (productId: string): SKU[] =>
-		$catalogStore.skus.filter((sku) => sku.productId === productId);
+		useSupabaseCatalog
+			? supabaseSkus.filter((sku) => sku.productId === productId)
+			: $catalogStore.skus.filter((sku) => sku.productId === productId);
 
 	const getConfigOptions = (groupId: string): ConfigOption[] =>
-		$productsOptionsState.getOptionsByGroup(groupId).filter((option) => option.active);
+		supabaseOptionsByGroup[groupId]?.length
+			? supabaseOptionsByGroup[groupId].filter((o) => o.active)
+			: $productsOptionsState.getOptionsByGroup(groupId).filter((option) => option.active);
 
 	const toggleOption = (group: ProductOptionGroup, optionId: string) => {
 		const current = selectionsByGroup[group.id] ?? [];
@@ -112,7 +246,67 @@
 		selectionsByGroup = { ...selectionsByGroup, [group.id]: [...current, optionId] };
 	};
 
-	const openConfig = (sku: SKU, product: Product) => {
+	const openConfig = async (sku: SKU, product: Product) => {
+		if (useSupabaseCatalog) {
+			configLoading = true;
+			configError = '';
+			try {
+				const { data: assignments, error: assignErr } = await supabase
+					.from('product_product_groups')
+					.select('group_id, max_select')
+					.eq('product_id', product.id);
+				if (assignErr || !assignments?.length) {
+					addSku(sku, product);
+					return;
+				}
+				const groupIds = assignments.map((a) => a.group_id);
+				const [groupsRes, itemsRes] = await Promise.all([
+					supabase.from('product_groups').select('id, name, sort_order').in('id', groupIds),
+					supabase.from('product_group_items').select('id, group_id, name, sort_order, active').in('group_id', groupIds).order('sort_order', { ascending: true }).order('name', { ascending: true })
+				]);
+				const groupsData = (groupsRes.data ?? []) as { id: string; name: string; sort_order: number }[];
+				const itemsData = (itemsRes.data ?? []) as { id: string; group_id: string; name: string; sort_order: number; active: boolean }[];
+				const now = new Date().toISOString();
+				const groups: ProductOptionGroup[] = groupsData.map((g) => {
+					const assignment = assignments.find((a) => a.group_id === g.id);
+					return {
+						id: g.id,
+						product_id: product.id,
+						name: g.name,
+						min_select: 0,
+						max_select: Math.max(1, assignment?.max_select ?? 1),
+						sort_order: g.sort_order ?? 0,
+						created_at: now,
+						updated_at: now
+					};
+				}).sort((a, b) => a.sort_order - b.sort_order);
+				const optionsByGroup: Record<string, ConfigOption[]> = {};
+				for (const item of itemsData) {
+					if (!item.active) continue;
+					const opt: ConfigOption = {
+						id: item.id,
+						group_id: item.group_id,
+						name: item.name,
+						price_delta: 0,
+						active: true,
+						sort_order: item.sort_order ?? 0,
+						created_at: now,
+						updated_at: now
+					};
+					if (!optionsByGroup[item.group_id]) optionsByGroup[item.group_id] = [];
+					optionsByGroup[item.group_id].push(opt);
+				}
+				configTarget = { sku, product };
+				configGroups = groups;
+				supabaseOptionsByGroup = optionsByGroup;
+				selectionsByGroup = Object.fromEntries(groups.map((g) => [g.id, []]));
+				optionQtyById = {};
+				configOpen = true;
+			} finally {
+				configLoading = false;
+			}
+			return;
+		}
 		const groups = $productsOptionsState.getGroupsByProduct(product.id);
 		if (groups.length === 0) {
 			addSku(sku, product);
@@ -120,6 +314,7 @@
 		}
 		configTarget = { sku, product };
 		configGroups = groups;
+		supabaseOptionsByGroup = {};
 		configError = '';
 		selectionsByGroup = Object.fromEntries(groups.map((g) => [g.id, []]));
 		optionQtyById = {};
@@ -283,11 +478,27 @@
 	};
 
 	onMount(() => {
-		void Promise.all([customersStore.load(), catalogStore.load(), shiftsStore.loadOpen()]);
+		const customerIdFromUrl = $page.url.searchParams.get('customerId');
+		const openClientModalFromUrl = $page.url.searchParams.get('openClientModal') === '1';
+		void (async () => {
+			await Promise.all([customersStore.load(), catalogStore.load(), shiftsStore.loadOpen()]);
+			await loadSupabaseCatalog();
+			if (customerIdFromUrl) {
+				const customer = $customersStore.find((c) => c.id === customerIdFromUrl);
+				if (customer) {
+					draftCount += 1;
+					const newDraft = createDraft(draftCount);
+					newDraft.selectedCustomerId = customer.id;
+					drafts = [{ ...newDraft, selectedCustomerId: customer.id }];
+					activeDraftId = newDraft.id;
+					await goto('/app/create_order', { replaceState: true });
+				}
+			} else if (openClientModalFromUrl) {
+				openClientModal(false);
+				await goto('/app/create_order', { replaceState: true });
+			}
+		})();
 		productsStore.getState().hydrate();
-		const first = createDraft(draftCount);
-		drafts = [first];
-		activeDraftId = first.id;
 		window.addEventListener('keydown', onKeyDown);
 		return () => window.removeEventListener('keydown', onKeyDown);
 	});
@@ -296,49 +507,67 @@
 <div class="grid grid-cols-1 gap-4 xl:grid-cols-12">
 	<div class="xl:col-span-8 space-y-4">
 		<section class="panel p-3">
-			<p class="mb-2 text-sm font-semibold">Pedidos</p>
-			<div class="flex gap-3 overflow-x-auto pb-1">
-				{#each drafts as draft, index}
-					<div class="min-w-[260px] rounded-xl border p-3">
-						<button
-							type="button"
-							class="w-full text-left"
-							onclick={() => {
-								activeDraftId = draft.id;
-							}}
+			<div class="flex gap-3 overflow-x-auto pb-1 scroll-smooth" role="region" aria-label="Carousel de pedidos">
+				{#if drafts.length === 0}
+					<button
+						type="button"
+						class="flex min-h-[120px] min-w-[260px] flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50/50 px-4 py-6 transition-colors hover:border-slate-400 hover:bg-slate-100/50 dark:border-neutral-600 dark:bg-neutral-900/50 dark:hover:border-neutral-500 dark:hover:bg-neutral-800/50"
+						onclick={openClientModal}
+					>
+						<svg
+							class="h-10 w-10 text-slate-400 dark:text-neutral-500"
+							fill="none"
+							stroke="currentColor"
+							viewBox="0 0 24 24"
+							aria-hidden="true"
 						>
-							<p class="text-sm font-semibold">{draftCustomer(draft)?.phone ?? `Pedido ${index + 1}`}</p>
-							<p class="mt-1 line-clamp-1 text-xs text-slate-500 dark:text-slate-400">
-								{draftCustomer(draft)?.address ?? 'Sin cliente seleccionado'}
-							</p>
-							<div class="mt-2 flex items-center justify-between text-xs">
-								<span class="rounded-full bg-slate-100 px-2 py-0.5 dark:bg-slate-800">
-									{draft.cart.length} items
-								</span>
-								<span class="font-semibold">{formatMoney(draftTotal(draft))}</span>
-							</div>
-						</button>
-						<label class="mt-2 block">
-							<span class="mb-1 block text-xs text-slate-500 dark:text-slate-400">Cliente</span>
-							<select
-								class="input !py-1 text-xs"
-								value={draft.selectedCustomerId ?? ''}
-								onchange={(e) => {
-									const value = (e.currentTarget as HTMLSelectElement).value;
-									updateDraftById(draft.id, (d) => ({ ...d, selectedCustomerId: value || null }));
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								stroke-width="1.5"
+								d="M12 4v16m8-8H4"
+							/>
+						</svg>
+						<span class="text-sm font-medium text-slate-600 dark:text-neutral-400">Crear Pedido</span>
+					</button>
+				{:else}
+					{#each drafts as draft, index}
+						<div class="min-w-[260px] rounded-xl border p-3">
+							<button
+								type="button"
+								class="w-full text-left"
+								onclick={() => {
+									activeDraftId = draft.id;
 								}}
 							>
-								<option value="">Seleccionar cliente</option>
-								{#each $customersStore as customer}
-									<option value={customer.id}>{customer.phone} - {customer.address}</option>
-								{/each}
-							</select>
-						</label>
-					</div>
-				{/each}
+								<p class="text-sm font-semibold">{draftCustomer(draft)?.phone ?? `Pedido ${index + 1}`}</p>
+								<p class="mt-1 line-clamp-1 text-xs text-slate-500 dark:text-slate-400">
+									{draftCustomer(draft)?.address ?? 'Sin cliente seleccionado'}
+								</p>
+								<div class="mt-2 flex items-center justify-between text-xs">
+									<span class="rounded-full bg-slate-100 px-2 py-0.5 dark:bg-slate-800">
+										{draft.cart.length} items
+									</span>
+									<span class="font-semibold">{formatMoney(draftTotal(draft))}</span>
+								</div>
+							</button>
+						</div>
+					{/each}
+					<button
+						type="button"
+						class="flex min-h-[100px] min-w-[200px] flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50/50 px-3 py-4 transition-colors hover:border-slate-400 hover:bg-slate-100/50 dark:border-neutral-600 dark:bg-neutral-900/50 dark:hover:border-neutral-500 dark:hover:bg-neutral-800/50"
+						onclick={openClientModal}
+					>
+						<svg class="h-8 w-8 text-slate-400 dark:text-neutral-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 4v16m8-8H4" />
+						</svg>
+						<span class="text-xs font-medium text-slate-600 dark:text-neutral-400">Crear Pedido</span>
+					</button>
+				{/if}
 			</div>
 		</section>
 
+		{#if selectedCustomer}
 		<section class="panel p-4">
 			<div class="mb-3 flex items-center gap-2">
 				<input
@@ -426,7 +655,7 @@
 									<div class="flex items-center gap-2 rounded-lg border border-slate-200 px-2 py-1 dark:border-slate-700">
 										<button class="btn-secondary !h-7 !w-7 !px-0 !py-0" onclick={() => decSku(sku)}>-</button>
 										<span class="w-5 text-center text-sm font-semibold">{qtyBySku(sku.id)}</span>
-										<button class="btn-primary !h-7 !w-7 !px-0 !py-0" onclick={() => openConfig(sku, product)}>+</button>
+										<button class="btn-primary !h-7 !w-7 !px-0 !py-0" disabled={configLoading} onclick={() => void openConfig(sku, product)}>{configLoading ? '…' : '+'}</button>
 									</div>
 								</div>
 							</div>
@@ -455,7 +684,7 @@
 									<div class="flex items-center gap-2 rounded-lg border border-slate-200 px-2 py-1 dark:border-slate-700">
 										<button class="btn-secondary !h-7 !w-7 !px-0 !py-0" onclick={() => decSku(sku)}>-</button>
 										<span class="w-5 text-center text-sm font-semibold">{qtyBySku(sku.id)}</span>
-										<button class="btn-primary !h-7 !w-7 !px-0 !py-0" onclick={() => openConfig(sku, product)}>+</button>
+										<button class="btn-primary !h-7 !w-7 !px-0 !py-0" disabled={configLoading} onclick={() => void openConfig(sku, product)}>{configLoading ? '…' : '+'}</button>
 									</div>
 								</div>
 							</div>
@@ -467,23 +696,47 @@
 				</div>
 			{/if}
 		</section>
+		{:else if activeDraft}
+		<section class="panel p-4">
+			<p class="text-center text-sm text-slate-500 dark:text-slate-400">
+				Seleccioná un cliente para agregar productos al pedido.
+			</p>
+			<button
+				type="button"
+				class="btn-primary mx-auto mt-3 block"
+				onclick={() => openClientModal(true)}
+			>
+				Seleccionar cliente
+			</button>
+		</section>
+		{/if}
 	</div>
 
+	{#if selectedCustomer}
 	<div class="xl:col-span-4 space-y-4">
 		<section class="panel p-4">
-			<h2 class="mb-3 text-base font-semibold">Resumen del cliente</h2>
-			{#if selectedCustomer}
-				<div class="rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700">
-					<p><span class="font-medium">Tel:</span> {selectedCustomer.phone}</p>
-					<p><span class="font-medium">Dirección:</span> {selectedCustomer.address}</p>
-					<p><span class="font-medium">Entre calles:</span> {selectedCustomer.betweenStreets ?? '-'}</p>
-					<p><span class="font-medium">Observación:</span> {selectedCustomer.notes ?? '-'}</p>
-				</div>
-			{:else}
-				<p class="text-sm text-slate-500 dark:text-slate-400">
-					Seleccioná un cliente en el bloque de pedidos (columna izquierda).
-				</p>
-			{/if}
+			<div class="rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700">
+				<p><span class="font-medium">Tel:</span> {selectedCustomer.phone}</p>
+				<p><span class="font-medium">Dirección:</span> {selectedCustomer.address}</p>
+				<p><span class="font-medium">Entre calles:</span> {selectedCustomer.betweenStreets ?? '-'}</p>
+				<p><span class="font-medium">Observación:</span> {selectedCustomer.notes ?? '-'}</p>
+			</div>
+			<div class="mt-3 flex flex-wrap gap-2">
+				<button
+					type="button"
+					class="btn-secondary flex-1 min-w-0"
+					onclick={() => openClientModal(true)}
+				>
+					Cambiar cliente
+				</button>
+				<button
+					type="button"
+					class="btn-secondary flex-1 min-w-0"
+					onclick={() => goto(`/app/clients?editId=${encodeURIComponent(selectedCustomer.id)}`)}
+				>
+					Editar cliente
+				</button>
+			</div>
 		</section>
 
 		<section class="panel p-4">
@@ -558,12 +811,13 @@
 			</div>
 		</section>
 	</div>
+	{/if}
 </div>
 
 <Dialog.Root bind:open={configOpen}>
 	<Dialog.Portal>
 		<Dialog.Overlay class="fixed inset-0 z-40 bg-black/50" />
-		<Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-full max-w-2xl -translate-x-1/2 -translate-y-1/2 rounded-lg bg-white p-4 dark:bg-slate-900">
+		<Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-full max-w-2xl -translate-x-1/2 -translate-y-1/2 rounded-lg bg-white p-4 dark:bg-black">
 			<div class="mb-3 flex items-center justify-between">
 				<h3 class="text-lg font-semibold">Configurar producto</h3>
 				<Dialog.Close class="btn-secondary">Cerrar</Dialog.Close>
@@ -626,6 +880,121 @@
 				<button class="btn-primary" disabled={!canAddConfigured()} onclick={addConfiguredProduct}>
 					Agregar
 				</button>
+			</div>
+		</Dialog.Content>
+	</Dialog.Portal>
+</Dialog.Root>
+
+<Dialog.Root bind:open={clientModalOpen}>
+	<Dialog.Portal>
+		<Dialog.Overlay class="fixed inset-0 z-40 bg-black/50" />
+		<Dialog.Content
+			class="fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border border-slate-200 bg-white p-4 shadow-xl dark:border-neutral-700 dark:bg-black"
+			aria-describedby="client-modal-desc"
+			aria-labelledby="client-modal-title"
+		>
+			<h2 id="client-modal-title" class="mb-4 text-lg font-semibold">Buscar o agregar cliente</h2>
+			{#if addClientMode}
+				<div id="client-modal-desc" class="space-y-3">
+					<label class="block">
+						<span class="mb-1 block text-sm text-slate-600 dark:text-slate-400">Teléfono</span>
+						<input
+							class="input w-full"
+							type="tel"
+							inputmode="numeric"
+							pattern="[0-9]*"
+							placeholder="Solo números"
+							value={newClientForm.phone}
+							onkeydown={(e) => {
+								if (e.key === 'Backspace' || e.key === 'Delete' || e.key === 'Tab' || e.key.startsWith('Arrow') || (e.ctrlKey || e.metaKey) && ['a', 'c', 'v', 'x'].includes(e.key.toLowerCase())) return;
+								if (!/^\d$/.test(e.key)) e.preventDefault();
+							}}
+							oninput={(e) => {
+								const v = (e.currentTarget as HTMLInputElement).value.replace(/\D/g, '');
+								newClientForm = { ...newClientForm, phone: v };
+							}}
+						/>
+					</label>
+					<label class="block">
+						<span class="mb-1 block text-sm text-slate-600 dark:text-slate-400">Dirección</span>
+						<input class="input w-full" type="text" bind:value={newClientForm.address} placeholder="Calle y número" />
+					</label>
+					<label class="block">
+						<span class="mb-1 block text-sm text-slate-600 dark:text-slate-400">Entre calles (opcional)</span>
+						<input class="input w-full" type="text" bind:value={newClientForm.betweenStreets} placeholder="Ej: Av. X y Calle Y" />
+					</label>
+					<label class="block">
+						<span class="mb-1 block text-sm text-slate-600 dark:text-slate-400">Observación (opcional)</span>
+						<input class="input w-full" type="text" bind:value={newClientForm.notes} placeholder="Referencias" />
+					</label>
+					{#if existingCustomerWithPhone}
+						<div class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+							<p class="font-medium">Este cliente ya existe</p>
+							<p class="mt-1 text-xs opacity-90">
+								Tel: {existingCustomerWithPhone.phone} — {existingCustomerWithPhone.address}
+							</p>
+							<button
+								type="button"
+								class="btn-primary mt-2 w-full"
+								onclick={() => selectClient(existingCustomerWithPhone)}
+							>
+								Usar este cliente
+							</button>
+						</div>
+					{/if}
+					<div class="flex gap-2 pt-2">
+						<button type="button" class="btn-secondary flex-1" onclick={() => (addClientMode = false)}>
+							Volver
+						</button>
+						<button
+							type="button"
+							class="btn-primary flex-1"
+							onclick={addNewClient}
+							disabled={!!existingCustomerWithPhone}
+						>
+							Crear y usar
+						</button>
+					</div>
+				</div>
+			{:else}
+				<div id="client-modal-desc" class="space-y-3">
+					<input
+						class="input w-full"
+						type="search"
+						placeholder="Buscar por teléfono o dirección..."
+						bind:value={clientSearch}
+						aria-label="Buscar cliente"
+					/>
+					<div class="max-h-64 space-y-1 overflow-y-auto rounded-lg border border-slate-200 dark:border-neutral-700">
+						{#each filteredClients as customer}
+							<button
+								type="button"
+								class="w-full rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-slate-100 dark:hover:bg-neutral-800"
+								onclick={() => selectClient(customer)}
+							>
+								<p class="font-medium">{customer.phone}</p>
+								<p class="text-xs text-slate-500 dark:text-slate-400">{customer.address}</p>
+								{#if customer.betweenStreets?.trim()}
+									<p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">Entre calles: {customer.betweenStreets.trim()}</p>
+								{/if}
+								{#if customer.notes?.trim()}
+									<p class="mt-0.5 line-clamp-2 text-xs text-slate-500 dark:text-slate-400">Obs: {customer.notes.trim()}</p>
+								{/if}
+							</button>
+						{/each}
+						{#if filteredClients.length === 0}
+							<p class="px-3 py-4 text-center text-sm text-slate-500 dark:text-slate-400">
+								Ningún cliente coincide. Agregá uno nuevo.
+							</p>
+						{/if}
+					</div>
+					<button type="button" class="btn-secondary w-full" onclick={() => (addClientMode = true)}>
+						Agregar cliente nuevo
+					</button>
+				</div>
+			{/if}
+			<div class="mt-4 flex justify-end">
+				<Dialog.Close class="btn-secondary">Cerrar</Dialog.Close>
 			</div>
 		</Dialog.Content>
 	</Dialog.Portal>

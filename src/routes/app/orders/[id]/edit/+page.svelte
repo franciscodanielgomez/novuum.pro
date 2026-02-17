@@ -35,7 +35,7 @@
 			changeDue: paymentMethod === 'CASH' ? Math.max(0, cashReceived - total) : undefined
 		});
 		toastsStore.success('Pedido editado');
-		await goto('/app/pedidos');
+		await goto('/app/orders');
 	};
 </script>
 
@@ -66,7 +66,7 @@
 			</label>
 			<div class="flex gap-2">
 				<button class="btn-primary" on:click={save}>Guardar</button>
-				<a class="btn-secondary" href="/app/pedidos">Cancelar</a>
+				<a class="btn-secondary" href="/app/orders">Cancelar</a>
 			</div>
 		</div>
 	{/if}

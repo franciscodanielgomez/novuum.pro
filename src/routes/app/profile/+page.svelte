@@ -2,6 +2,7 @@
 	import { Country, State } from 'country-state-city';
 	import { getCountries, getCountryCallingCode } from 'libphonenumber-js/min';
 	import { supabase } from '$lib/supabase/client';
+	import { removeStorageFileIfOurs } from '$lib/supabase/storage-helpers';
 	import { sessionStore } from '$lib/stores/session';
 	import { toastsStore } from '$lib/stores/toasts';
 	import { onDestroy, onMount } from 'svelte';
@@ -219,8 +220,8 @@
 		}
 	};
 
-	// Mismo patrón que negocio: subida directa, sin optimización ni reintentos.
-	const uploadAvatar = async (file: File, userId: string) => {
+	// Mismo patrón que negocio: subida directa; se borra la foto anterior si era de nuestro bucket.
+	const uploadAvatar = async (file: File, userId: string, currentAvatarUrl?: string | null) => {
 		if (file.size > MAX_AVATAR_SIZE_BYTES) {
 			return { ok: false as const, message: 'La foto supera el límite de 50MB' };
 		}
@@ -232,7 +233,8 @@
 		const path = `${userId}/profile/${fileName}`;
 		const { error } = await supabase.storage.from(AVATAR_BUCKET).upload(path, file, {
 			cacheControl: '3600',
-			upsert: true
+			upsert: false,
+			contentType: file.type || 'image/png'
 		});
 		if (error) {
 			const message =
@@ -244,6 +246,9 @@
 		const { data } = supabase.storage.from(AVATAR_BUCKET).getPublicUrl(path);
 		if (!data?.publicUrl) {
 			return { ok: false as const, message: 'No se pudo obtener la URL de la foto' };
+		}
+		if (currentAvatarUrl?.trim()) {
+			await removeStorageFileIfOurs(AVATAR_BUCKET, currentAvatarUrl.trim());
 		}
 		return { ok: true as const, url: data.publicUrl };
 	};
@@ -371,7 +376,7 @@
 			let nextAvatarUrl = avatarUrl.trim() || null;
 			if (selectedAvatarFile) {
 				try {
-					const uploaded = await uploadAvatar(selectedAvatarFile, userId);
+					const uploaded = await uploadAvatar(selectedAvatarFile, userId, avatarUrl.trim() || null);
 					if (!uploaded.ok) {
 						toastsStore.error(uploaded.message ?? 'No se pudo subir la foto de perfil');
 						return;
@@ -536,11 +541,13 @@
 </script>
 
 <section class="space-y-4">
-	<div>
-		<h1 class="text-lg font-semibold">Mi perfil</h1>
-		<p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-			Actualizá tus datos personales y foto de perfil.
-		</p>
+	<div class="panel flex items-center justify-between p-4">
+		<div>
+			<h1 class="text-base font-semibold">Mi perfil</h1>
+			<p class="text-xs text-slate-500 dark:text-slate-400">
+				Actualizá tus datos personales, teléfonos y foto de perfil.
+			</p>
+		</div>
 	</div>
 
 	<div class="grid grid-cols-1 gap-4 xl:grid-cols-2">

@@ -1,4 +1,5 @@
 import { supabase } from '$lib/supabase/client';
+import { removeStorageFileIfOurs } from '$lib/supabase/storage-helpers';
 import { get, writable } from 'svelte/store';
 
 type BusinessSettings = {
@@ -125,7 +126,7 @@ export const businessStore = {
 		state.update((s) => ({ ...s, ...fallbackNext }));
 		return true;
 	},
-	uploadLogo: async (file: File) => {
+	uploadLogo: async (file: File, currentLogoUrl?: string | null) => {
 		if (!file) return { ok: false as const, message: 'Archivo inválido' };
 		if (file.size > MAX_LOGO_SIZE_BYTES) {
 			return { ok: false as const, message: 'El logo supera el límite de 50MB' };
@@ -146,7 +147,8 @@ export const businessStore = {
 		const path = `${user.id}/business/${fileName}`;
 		const { error } = await supabase.storage.from(LOGO_BUCKET).upload(path, file, {
 			cacheControl: '3600',
-			upsert: true
+			upsert: false,
+			contentType: file.type || 'image/png'
 		});
 		if (error) {
 			const message =
@@ -161,6 +163,9 @@ export const businessStore = {
 			return { ok: false as const, message: 'No se pudo obtener la URL pública del logo' };
 		}
 
+		if (currentLogoUrl?.trim()) {
+			await removeStorageFileIfOurs(LOGO_BUCKET, currentLogoUrl.trim());
+		}
 		return { ok: true as const, url: data.publicUrl };
 	},
 	updateBranchName: async (name: string) => {

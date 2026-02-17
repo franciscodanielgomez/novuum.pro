@@ -1,6 +1,8 @@
 <script lang="ts">
 	import SideDrawer from '$lib/components/SideDrawer.svelte';
 	import StatusBadge from '$lib/components/StatusBadge.svelte';
+	import StatusFilterButton from '$lib/components/StatusFilterButton.svelte';
+	import type { StatusFilterValue } from '$lib/components/StatusFilterButton.svelte';
 	import DataTablePaginator from '$lib/components/table/DataTablePaginator.svelte';
 	import { loadTableState, saveTableState } from '$lib/components/table/table.state';
 	import { ordersStore } from '$lib/stores/orders';
@@ -19,7 +21,8 @@
 	} from '@tanstack/table-core';
 
 	let query = $state('');
-	let statusFilter = $state<OrderStatus | 'ALL'>('ALL');
+	let statusFilter = $state<StatusFilterValue>('TODOS');
+	const STATUS_OPTIONS: StatusFilterValue[] = ['TODOS', 'NO_ASIGNADO', 'ASIGNADO', 'COMPLETADO', 'CANCELADO'];
 	let dateFilter = $state(todayYmd());
 	let selectedOrder = $state<Order | null>(null);
 	let drawerOpen = $state(false);
@@ -34,7 +37,7 @@
 		$ordersStore.filter((order) => {
 			const text = `${order.id} ${order.customerPhoneSnapshot} ${order.addressSnapshot}`.toLowerCase();
 			const matchText = !query.trim() || text.includes(query.trim().toLowerCase());
-			const matchStatus = statusFilter === 'ALL' || order.status === statusFilter;
+			const matchStatus = statusFilter === 'TODOS' || order.status === statusFilter;
 			const matchDate = !dateFilter || order.createdAt.slice(0, 10) === dateFilter;
 			return matchText && matchStatus && matchDate;
 		})
@@ -139,9 +142,9 @@
 				pageSize = PAGE_SIZE_OPTIONS.includes(saved.pagination.pageSize) ? saved.pagination.pageSize : 20;
 			}
 			if (saved?.filters && typeof saved.filters === 'object') {
-				const f = saved.filters as { status?: OrderStatus | 'ALL'; date?: string };
-				if (f.status && ['ALL', 'NO_ASIGNADO', 'ASIGNADO', 'COMPLETADO', 'CANCELADO'].includes(f.status))
-					statusFilter = f.status;
+				const f = saved.filters as { status?: StatusFilterValue; date?: string };
+				if (f.status && STATUS_OPTIONS.includes(f.status as StatusFilterValue))
+					statusFilter = f.status as StatusFilterValue;
 				if (f.date) dateFilter = f.date;
 			}
 		}
@@ -149,6 +152,15 @@
 </script>
 
 <div class="space-y-4">
+	<div class="panel flex items-center justify-between p-4">
+		<div>
+			<h1 class="text-base font-semibold">Pedidos</h1>
+			<p class="text-xs text-slate-500 dark:text-slate-400">
+				Listado de pedidos: filtrar por estado, fecha y buscar por ID, teléfono o dirección.
+			</p>
+		</div>
+	</div>
+
 	<div class="panel p-4">
 		<div class="grid grid-cols-1 gap-3 lg:grid-cols-4">
 			<label for="pedidos-search" class="sr-only">Buscar</label>
@@ -163,19 +175,16 @@
 				}}
 			/>
 			<div class="flex flex-wrap gap-2 lg:col-span-2">
-				{#each ['ALL', 'NO_ASIGNADO', 'ASIGNADO', 'COMPLETADO', 'CANCELADO'] as status}
-					<button
-						class="rounded-full border px-3 py-1 text-xs"
-						class:bg-slate-800={statusFilter === status}
-						class:text-white={statusFilter === status}
-						onclick={() => {
-							statusFilter = status as typeof statusFilter;
+				{#each STATUS_OPTIONS as status}
+					<StatusFilterButton
+						status={status}
+						active={statusFilter === status}
+						onClick={() => {
+							statusFilter = status;
 							pageIndex = 0;
 							persist();
 						}}
-					>
-						{status === 'ALL' ? 'Todos' : status}
-					</button>
+					/>
 				{/each}
 			</div>
 			<input
@@ -195,7 +204,7 @@
 			<p class="py-8 text-center text-sm text-slate-500 dark:text-slate-400">Cargando tabla…</p>
 		{:else}
 			<table class="min-w-full text-sm">
-				<thead class="bg-slate-50 dark:bg-slate-800">
+				<thead class="bg-slate-50 dark:bg-neutral-900">
 					<tr>
 						<th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">ID</th>
 						<th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Hora</th>
@@ -207,13 +216,13 @@
 						<th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Caja</th>
 						<th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Cadete</th>
 						<th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Estado</th>
-						<th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Acciones</th>
+						<th class="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Acciones</th>
 					</tr>
 				</thead>
 				<tbody>
 					{#each paginatedRows as row}
 						{@const order = row.original}
-						<tr class="border-t border-slate-100 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/40">
+						<tr class="border-t border-slate-100 hover:bg-slate-50 dark:border-neutral-800 dark:hover:bg-neutral-900/60">
 							<td class="whitespace-nowrap px-3 py-2">{order.id}</td>
 							<td class="whitespace-nowrap px-3 py-2">{order.hour}</td>
 							<td class="whitespace-nowrap px-3 py-2">{order.customerPhoneSnapshot}</td>
@@ -224,8 +233,8 @@
 							<td class="whitespace-nowrap px-3 py-2">{order.cashierNameSnapshot ?? '-'}</td>
 							<td class="whitespace-nowrap px-3 py-2">{getCadeteName(order)}</td>
 							<td class="whitespace-nowrap px-3 py-2"><StatusBadge status={order.status} /></td>
-							<td class="px-3 py-2">
-								<div class="flex flex-wrap gap-2">
+							<td class="px-3 py-2 text-right">
+								<div class="flex flex-wrap justify-end gap-2">
 									<button
 										class="btn-secondary !px-2 !py-1 text-xs"
 										onclick={() => {
@@ -249,7 +258,7 @@
 										Completar
 									</button>
 									<button class="btn-danger !px-2 !py-1 text-xs" onclick={() => updateStatus(order.id, 'CANCELADO')}>Cancelar</button>
-									<a class="btn-secondary !px-2 !py-1 text-xs" href={`/app/pedidos/${order.id}/editar`}>Editar</a>
+									<a class="btn-secondary !px-2 !py-1 text-xs" href={`/app/orders/${order.id}/edit`}>Editar</a>
 								</div>
 							</td>
 						</tr>
@@ -280,7 +289,7 @@
 			</div>
 			<div class="space-y-2">
 				{#each selectedOrder.items as item}
-					<div class="flex items-center justify-between rounded border border-slate-200 px-2 py-1 dark:border-slate-700">
+					<div class="flex items-center justify-between rounded border border-slate-200 px-2 py-1 dark:border-neutral-800">
 						<span>{item.qty}x {item.nameSnapshot}</span>
 						<span>{formatMoney(item.subtotal)}</span>
 					</div>

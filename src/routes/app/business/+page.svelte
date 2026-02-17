@@ -38,7 +38,7 @@
 		let nextLogoUrl = logoUrl.trim() || null;
 
 		if (selectedLogoFile) {
-			const uploaded = await businessStore.uploadLogo(selectedLogoFile);
+			const uploaded = await businessStore.uploadLogo(selectedLogoFile, logoUrl.trim() || null);
 			if (!uploaded.ok) {
 				toastsStore.error(uploaded.message ?? 'No se pudo subir el logo');
 				isSaving = false;
@@ -75,11 +75,17 @@
 	});
 </script>
 
+<div class="space-y-4">
+	<div class="panel flex items-center justify-between p-4 max-w-2xl">
+		<div>
+			<h1 class="text-base font-semibold">Negocio</h1>
+			<p class="text-xs text-slate-500 dark:text-slate-400">
+				Configuración visible en el sistema: logo, nombre de empresa y sucursal.
+			</p>
+		</div>
+	</div>
+
 <section class="panel max-w-2xl p-6">
-	<h1 class="text-lg font-semibold">Negocio</h1>
-	<p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
-		Configuracion visible en el sistema: logo, nombre de empresa y sucursal.
-	</p>
 
 	<div class="mt-5 space-y-3">
 		<label class="block space-y-1">
@@ -143,3 +149,4 @@
 		{/if}
 	</div>
 </section>
+</div>

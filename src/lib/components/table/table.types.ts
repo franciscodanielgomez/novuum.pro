@@ -46,10 +46,14 @@ export type DataTableFilter<TData> =
 
 export type DataTableActionVariant = 'default' | 'success' | 'danger' | 'secondary';
 
+export type DataTableActionIcon = 'edit' | 'trash' | 'plus';
+
 export interface DataTableAction<TData> {
 	label: string;
 	onClick: (row: TData) => void;
 	variant?: DataTableActionVariant;
+	/** Si se define, se muestra solo el icono (label se usa para aria-label y title) */
+	icon?: DataTableActionIcon;
 }
 
 export interface DataTableInitialState {

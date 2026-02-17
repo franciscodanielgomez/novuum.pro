@@ -16,7 +16,7 @@
 	});
 </script>
 
-<div class="min-h-screen bg-slate-100 p-6 dark:bg-slate-950">
+<div class="min-h-screen bg-slate-100 p-6 dark:bg-black">
 	<div class="mb-4 flex items-center justify-between">
 		<h1 class="text-xl font-semibold">Dashboard</h1>
 		<div class="flex gap-2">

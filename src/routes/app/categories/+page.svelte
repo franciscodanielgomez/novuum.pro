@@ -123,8 +123,13 @@
 </script>
 
 <div class="space-y-4">
-	<div class="flex items-center justify-between">
-		<h1 class="text-lg font-semibold">Categorías</h1>
+	<div class="panel flex items-center justify-between p-4">
+		<div>
+			<h1 class="text-base font-semibold">Categorías</h1>
+			<p class="text-xs text-slate-500 dark:text-slate-400">
+				Organizá los productos por tipo (bebidas, comidas, etc.) y orden de aparición.
+			</p>
+		</div>
 		<button class="btn-primary" onclick={openCreate}>+ Nueva categoría</button>
 	</div>
 
@@ -147,8 +152,7 @@
 			rowId={(c) => c.id}
 			globalSearch={{ keys: ['name'], placeholder: 'Buscar por nombre' }}
 			actions={[
-				{ label: 'Editar', onClick: openEdit, variant: 'secondary' },
-				{ label: 'Eliminar', onClick: (c) => remove(c.id), variant: 'danger' }
+				{ label: 'Editar', onClick: openEdit, variant: 'secondary', icon: 'edit' }
 			]}
 			emptyMessage="Aún no hay categorías. Creá una con «Nueva categoría»."
 			loading={loading}
@@ -160,7 +164,7 @@
 <Dialog.Root bind:open={dialogOpen}>
 	<Dialog.Portal>
 		<Dialog.Overlay class="fixed inset-0 z-40 bg-black/40" />
-		<Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg bg-white p-4 dark:bg-slate-900">
+		<Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg bg-white p-4 dark:bg-black">
 			<h3 class="mb-3 text-lg font-semibold">{editingId ? 'Editar categoría' : 'Nueva categoría'}</h3>
 			<div class="space-y-3">
 				<label class="block space-y-1">

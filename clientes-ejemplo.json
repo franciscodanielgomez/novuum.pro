@@ -1,0 +1,19 @@
+[
+	{
+		"phone": "1112345678",
+		"address": "Av. Corrientes 1234",
+		"betweenStreets": "Av. Callao y Av. Libertad",
+		"notes": ""
+	},
+	{
+		"phone": "1198765432",
+		"address": "Licenciado Arias 300",
+		"betweenStreets": "",
+		"notes": "Dejar en portería"
+	},
+	{
+		"phone": "1155551234",
+		"address": "Calle Falsa 123",
+		"notes": "Referencia: edificio blanco"
+	}
+]

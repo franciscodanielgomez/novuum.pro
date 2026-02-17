@@ -231,17 +231,17 @@
 
 <div class="space-y-3">
 	{#if !browser}
-		<div class="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400">
+		<div class="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400">
 			Cargando tabla…
 		</div>
 	{:else}
 	{#if !table}
-		<div class="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400">
+		<div class="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400">
 			Cargando tabla…
 		</div>
 	{:else}
 	{#if title}
-		<h2 class="text-lg font-semibold text-slate-800 dark:text-slate-200">{title}</h2>
+		<h2 class="text-lg font-semibold text-slate-800 dark:text-neutral-200">{title}</h2>
 	{/if}
 
 	<div class="flex flex-wrap items-center gap-3">
@@ -264,7 +264,7 @@
 			{#if filter.type === 'chips'}
 				{@const f = filter as DataTableFilterChips<TData>}
 				<div class="flex flex-wrap items-center gap-1">
-					<span class="text-xs font-medium text-slate-500 dark:text-slate-400">{f.label}:</span>
+					<span class="text-xs font-medium text-slate-500 dark:text-neutral-400">{f.label}:</span>
 					{#each f.options as opt}
 						<button
 							type="button"
@@ -273,7 +273,7 @@
 							class:bg-slate-800={filterValues[f.id] === opt.value}
 							class:text-white={filterValues[f.id] === opt.value}
 							class:border-slate-200={filterValues[f.id] !== opt.value}
-							class:dark:border-slate-600={filterValues[f.id] !== opt.value}
+							class:dark:border-neutral-600={filterValues[f.id] !== opt.value}
 							onclick={() => setFilter(f.id, opt.value)}
 						>
 							{opt.label}
@@ -283,7 +283,7 @@
 			{:else if filter.type === 'date'}
 				{@const f = filter as DataTableFilterDate<TData>}
 				<label class="flex items-center gap-1">
-					<span class="text-xs font-medium text-slate-500 dark:text-slate-400">{f.label}:</span>
+					<span class="text-xs font-medium text-slate-500 dark:text-neutral-400">{f.label}:</span>
 					<input
 						type="date"
 						class="input !py-1 text-sm"
@@ -295,7 +295,7 @@
 			{:else if filter.type === 'select'}
 				{@const f = filter as DataTableFilterSelect<TData>}
 				<label class="flex items-center gap-1">
-					<span class="text-xs font-medium text-slate-500 dark:text-slate-400">{f.label}:</span>
+					<span class="text-xs font-medium text-slate-500 dark:text-neutral-400">{f.label}:</span>
 					<select
 						class="input !py-1 text-sm"
 						aria-label={f.label}
@@ -316,7 +316,7 @@
 			<div class="relative" role="group" aria-label="Columnas visibles">
 				<button
 					type="button"
-					class="rounded-lg border border-slate-200 px-2 py-1.5 text-sm text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
+					class="rounded-lg border border-slate-200 px-2 py-1.5 text-sm text-slate-600 hover:bg-slate-50 dark:border-neutral-600 dark:text-neutral-300 dark:hover:bg-neutral-900"
 					aria-haspopup="listbox"
 					aria-expanded={columnVisibilityOpen}
 					onclick={() => (columnVisibilityOpen = !columnVisibilityOpen)}
@@ -326,7 +326,7 @@
 				</button>
 				{#if columnVisibilityOpen}
 					<div
-						class="absolute right-0 top-full z-20 mt-1 w-48 rounded-lg border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-600 dark:bg-slate-800"
+						class="absolute right-0 top-full z-20 mt-1 w-48 rounded-lg border border-slate-200 bg-white py-1 shadow-lg dark:border-neutral-600 dark:bg-black"
 						role="listbox"
 					>
 						{#each table.getAllLeafColumns() as col}
@@ -355,15 +355,17 @@
 		</div>
 	</div>
 
-	<div class="overflow-auto rounded-lg border border-slate-200 dark:border-slate-700">
+	<div class="overflow-auto rounded-lg border border-slate-200 dark:border-neutral-800">
 		<table class="min-w-full text-sm" role="grid">
-			<thead class="sticky top-0 z-10 bg-slate-50 dark:bg-slate-800">
+			<thead class="sticky top-0 z-10 bg-slate-50 dark:bg-neutral-900">
 				{#each headerGroups as headerGroup}
 					<tr>
 						{#each headerGroup.headers as header}
 							{#if header.column.getIsVisible()}
 								<th
-									class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300"
+									class="px-3 py-2 font-medium text-slate-600 dark:text-neutral-300"
+									class:text-left={header.column.id !== '__actions__'}
+									class:text-right={header.column.id === '__actions__'}
 									class:cursor-pointer={header.column.getCanSort()}
 									colspan={header.colSpan}
 									scope="col"
@@ -384,37 +386,53 @@
 			<tbody>
 				{#if loading}
 					<tr>
-						<td colspan={visibleColumns.length} class="px-3 py-8 text-center text-slate-500 dark:text-slate-400">
+						<td colspan={visibleColumns.length} class="px-3 py-8 text-center text-slate-500 dark:text-neutral-400">
 							Cargando…
 						</td>
 					</tr>
 				{:else if rowModel.rows.length === 0}
 					<tr>
-						<td colspan={visibleColumns.length} class="px-3 py-8 text-center text-slate-500 dark:text-slate-400">
+						<td colspan={visibleColumns.length} class="px-3 py-8 text-center text-slate-500 dark:text-neutral-400">
 							{emptyMessage}
 						</td>
 					</tr>
 				{:else}
 					{#each rowModel.rows as row}
-						<tr class="border-t border-slate-100 hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/40">
+						<tr class="border-t border-slate-100 hover:bg-slate-50 dark:border-neutral-800 dark:hover:bg-slate-800/40">
 							{#each row.getVisibleCells() as cell}
 								{#if cell.column.id === '__actions__'}
-									<td class="px-3 py-2">
-										<div class="flex flex-wrap gap-2">
+									<td class="px-3 py-2 text-right">
+										<div class="flex flex-wrap items-center justify-end gap-1">
 											{#each actions as action}
 												{@const variant = action.variant ?? 'default'}
 												<button
 													type="button"
-													class="rounded border px-2 py-1 text-xs transition {variant === 'success'
-														? 'border-emerald-600 bg-emerald-600 text-white'
+													title={action.label}
+													aria-label={action.label}
+													class="inline-flex h-8 w-8 items-center justify-center rounded border transition {variant === 'success'
+														? 'border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700'
 														: variant === 'danger'
-															? 'border-red-300 bg-red-600 text-white'
+															? 'border-red-300 bg-red-600 text-white hover:bg-red-700'
 															: variant === 'secondary'
-																? 'border-slate-200 dark:border-slate-600'
-																: 'border-slate-300'}"
+																? 'border-slate-200 text-slate-600 hover:bg-slate-100 dark:border-neutral-600 dark:text-neutral-300 dark:hover:bg-neutral-800'
+																: 'border-slate-300 text-slate-700 hover:bg-slate-100'}"
 													onclick={() => action.onClick(row.original as TData)}
 												>
-													{action.label}
+													{#if action.icon === 'edit'}
+														<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+															<path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+														</svg>
+													{:else if action.icon === 'trash'}
+														<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+															<path stroke-linecap="round" stroke-linejoin="round" d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m-3 0h6" />
+														</svg>
+													{:else if action.icon === 'plus'}
+														<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+															<path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+														</svg>
+													{:else}
+														<span class="text-xs">{action.label}</span>
+													{/if}
 												</button>
 											{/each}
 										</div>

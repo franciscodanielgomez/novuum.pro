@@ -94,14 +94,14 @@
 		<nav class="flex flex-wrap items-center gap-1" aria-label="Paginación" data-scope="pagination">
 			<button
 				type="button"
-				class="inline-flex h-9 min-w-9 items-center justify-center rounded-lg border border-slate-200 px-2 text-sm font-medium text-slate-700 transition disabled:pointer-events-none disabled:opacity-50 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
+				class="inline-flex h-9 min-w-9 items-center justify-center rounded-lg border border-slate-200 px-2 text-sm font-medium text-slate-700 transition disabled:pointer-events-none disabled:opacity-50 hover:bg-slate-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-900"
 				aria-label="Primera página"
 				disabled={!canFirst}
 				onclick={() => onPageIndexChange(0)}
 			>« Primero</button>
 			<button
 				type="button"
-				class="inline-flex h-9 min-w-9 items-center justify-center rounded-lg border border-slate-200 px-2 text-sm font-medium text-slate-700 transition disabled:pointer-events-none disabled:opacity-50 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
+				class="inline-flex h-9 min-w-9 items-center justify-center rounded-lg border border-slate-200 px-2 text-sm font-medium text-slate-700 transition disabled:pointer-events-none disabled:opacity-50 hover:bg-slate-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-900"
 				aria-label="Página anterior"
 				disabled={!canPrev}
 				onclick={() => onPageIndexChange(Math.max(0, pageIndex - 1))}
@@ -119,9 +119,9 @@
 						class:border-slate-200={item.value !== currentPageOneBased}
 						class:text-slate-700={item.value !== currentPageOneBased}
 						class:hover:bg-slate-50={item.value !== currentPageOneBased}
-						class:dark:border-slate-600={item.value !== currentPageOneBased}
-						class:dark:text-slate-300={item.value !== currentPageOneBased}
-						class:dark:hover:bg-slate-800={item.value !== currentPageOneBased}
+						class:dark:border-neutral-700={item.value !== currentPageOneBased}
+						class:dark:text-neutral-300={item.value !== currentPageOneBased}
+						class:dark:hover:bg-neutral-900={item.value !== currentPageOneBased}
 						aria-label="Página {item.value}"
 						onclick={() => onPageIndexChange(item.value! - 1)}
 					>{item.value}</button>
@@ -129,14 +129,14 @@
 			{/each}
 			<button
 				type="button"
-				class="inline-flex h-9 min-w-9 items-center justify-center rounded-lg border border-slate-200 px-2 text-sm font-medium text-slate-700 transition disabled:pointer-events-none disabled:opacity-50 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
+				class="inline-flex h-9 min-w-9 items-center justify-center rounded-lg border border-slate-200 px-2 text-sm font-medium text-slate-700 transition disabled:pointer-events-none disabled:opacity-50 hover:bg-slate-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-900"
 				aria-label="Página siguiente"
 				disabled={!canNext}
 				onclick={() => onPageIndexChange(Math.min(pageCount - 1, pageIndex + 1))}
 			>Siguiente ›</button>
 			<button
 				type="button"
-				class="inline-flex h-9 min-w-9 items-center justify-center rounded-lg border border-slate-200 px-2 text-sm font-medium text-slate-700 transition disabled:pointer-events-none disabled:opacity-50 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800"
+				class="inline-flex h-9 min-w-9 items-center justify-center rounded-lg border border-slate-200 px-2 text-sm font-medium text-slate-700 transition disabled:pointer-events-none disabled:opacity-50 hover:bg-slate-50 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-900"
 				aria-label="Última página"
 				disabled={!canLast}
 				onclick={() => onPageIndexChange(Math.max(0, pageCount - 1))}

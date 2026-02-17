@@ -282,8 +282,13 @@
 </script>
 
 <div class="space-y-4">
-	<div class="flex items-center justify-between">
-		<h1 class="text-lg font-semibold">Grupos</h1>
+	<div class="panel flex items-center justify-between p-4">
+		<div>
+			<h1 class="text-base font-semibold">Grupos</h1>
+			<p class="text-xs text-slate-500 dark:text-slate-400">
+				Grupos de opciones por producto (sabores, tamaños, extras) y sus ítems.
+			</p>
+		</div>
 		<button class="btn-primary" onclick={openCreate}>+ Nuevo grupo</button>
 	</div>
 
@@ -306,8 +311,7 @@
 			rowId={(g) => g.id}
 			globalSearch={{ keys: ['name'], placeholder: 'Buscar por nombre' }}
 			actions={[
-				{ label: 'Editar y agregar ítems', onClick: openEdit, variant: 'secondary' },
-				{ label: 'Eliminar', onClick: openDeleteConfirm, variant: 'danger' }
+				{ label: 'Editar y agregar ítems', onClick: openEdit, variant: 'secondary', icon: 'edit' }
 			]}
 			emptyMessage="Aún no hay grupos. Creá uno con «Nuevo grupo» (ej. Sabores)."
 			loading={loading}
@@ -320,7 +324,7 @@
 <Dialog.Root bind:open={dialogOpen}>
 	<Dialog.Portal>
 		<Dialog.Overlay class="fixed inset-0 z-40 bg-black/40" />
-		<Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg bg-white p-4 dark:bg-slate-900">
+		<Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg bg-white p-4 dark:bg-black">
 			<h3 class="mb-3 text-lg font-semibold">Nuevo grupo</h3>
 			<div class="space-y-3">
 				<label class="block space-y-1">
@@ -350,7 +354,7 @@
 <Dialog.Root open={groupToDelete !== null} onOpenChange={(open) => { if (!open) groupToDelete = null; }}>
 	<Dialog.Portal>
 		<Dialog.Overlay class="fixed inset-0 z-40 bg-black/40" />
-		<Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-full max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-lg bg-white p-4 dark:bg-slate-900">
+		<Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-full max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-lg bg-white p-4 dark:bg-black">
 			<h3 class="mb-2 text-lg font-semibold">Eliminar grupo</h3>
 			<p class="mb-4 text-sm text-slate-600 dark:text-slate-400">
 				¿Está seguro que desea eliminar el grupo "{groupToDelete?.name}" y todos sus ítems?
@@ -373,12 +377,12 @@
 	<Dialog.Portal>
 		<Dialog.Overlay class="fixed inset-0 z-40 bg-black/30" />
 		<Dialog.Content
-			class="fixed right-0 top-0 z-50 flex h-screen w-[480px] max-w-[95vw] flex-col border-l border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900"
+			class="fixed right-0 top-0 z-50 flex h-screen w-[480px] max-w-[95vw] flex-col border-l border-slate-200 bg-white shadow-xl dark:border-neutral-800 dark:bg-black"
 		>
-			<div class="flex shrink-0 items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+			<div class="flex shrink-0 items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-neutral-800">
 				<h2 class="text-lg font-semibold">{selectedGroup?.name ?? 'Grupo'}</h2>
 				<Dialog.Close
-					class="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+					class="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-neutral-900 dark:hover:text-neutral-200"
 					aria-label="Cerrar"
 				>
 					<svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -409,7 +413,7 @@
 						</div>
 					</div>
 
-					<div class="mt-6 border-t border-slate-200 pt-4 dark:border-slate-700">
+					<div class="mt-6 border-t border-slate-200 pt-4 dark:border-neutral-800">
 						<h3 class="mb-2 text-base font-semibold">Árbol de categorías e ítems</h3>
 						<p class="mb-3 text-xs text-slate-500 dark:text-slate-400">
 							Primero agregá categorías (ej. FRUTAS A LA CREMA, CHOCOLATES). Luego agregá ítems bajo cada categoría (ej. ANANA A LA CREMA, CHOCO. BLANCO).
@@ -462,10 +466,10 @@
 						{:else}
 							<ul class="space-y-1">
 								{#each categories as cat}
-									<li class="rounded-lg border border-slate-200 dark:border-slate-700">
+									<li class="rounded-lg border border-slate-200 dark:border-neutral-800">
 										<div class="flex items-center gap-1 px-2 py-1.5">
 											<button
-												class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+												class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-500 hover:bg-slate-100 dark:hover:bg-neutral-900"
 												onclick={() => toggleCategory(cat.id)}
 												aria-label={expandedCategories.has(cat.id) ? 'Contraer' : 'Expandir'}
 											>
@@ -490,7 +494,7 @@
 											{/if}
 										</div>
 										{#if expandedCategories.has(cat.id)}
-											<ul class="border-t border-slate-100 bg-slate-50/50 pl-6 pr-2 py-1 dark:border-slate-700 dark:bg-slate-800/30">
+											<ul class="border-t border-slate-100 bg-slate-50/50 pl-6 pr-2 py-1 dark:border-neutral-800 dark:bg-neutral-900/50">
 												{#each getChildren(cat.id) as child}
 													<li class="flex items-center justify-between gap-1 py-1.5 text-sm">
 														{#if editingItemId === child.id}

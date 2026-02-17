@@ -1,6 +1,7 @@
 import { browser } from '$app/environment';
 
-export const PHONE_REGEX = /^[0-9+\s]+$/;
+/** Solo dígitos 0-9 para teléfono de cliente */
+export const PHONE_REGEX = /^[0-9]+$/;
 
 export const generateId = (prefix: string) =>
 	`${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;

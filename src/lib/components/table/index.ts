@@ -9,6 +9,7 @@ export {
 	type DataTableFilterDate,
 	type DataTableFilterSelect,
 	type DataTableAction,
+	type DataTableActionIcon,
 	type DataTableInitialState,
 	type DataTablePersistedState
 } from './table.types';

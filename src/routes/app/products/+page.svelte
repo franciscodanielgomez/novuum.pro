@@ -11,6 +11,7 @@
 	import { toastsStore } from '$lib/stores/toasts';
 	import { formatMoney } from '$lib/utils';
 	import { supabase } from '$lib/supabase/client';
+	import { removeStorageFileIfOurs } from '$lib/supabase/storage-helpers';
 	import { onMount } from 'svelte';
 	import { browser } from '$app/environment';
 	import { createTable, getCoreRowModel, getPaginationRowModel, type ColumnDef, type Table } from '@tanstack/table-core';
@@ -29,6 +30,7 @@
 		description: string;
 		price: number;
 		active: boolean;
+		image_url?: string | null;
 		product_categories?: ProductCategoryLink[];
 	};
 
@@ -76,13 +78,16 @@
 	type CategoryOption = { id: string; name: string };
 	type ProductGroupOption = { id: string; name: string };
 	type ProductGroupAssignment = { group_id: string; max_select: number };
+	const PRODUCT_IMAGES_BUCKET = 'novum-grido';
 	let productForm = $state({
 		name: '',
 		base_price: 0,
 		active: true,
+		image_url: '',
 		category_ids: [] as string[],
 		groups: [] as ProductGroupAssignment[]
 	});
+	let productImageUploading = $state(false);
 	let categoriesList = $state<CategoryOption[]>([]);
 	let productGroupsList = $state<ProductGroupOption[]>([]);
 	let groupForm = $state({ name: '', min_select: 0, max_select: 1, sort_order: 0 });
@@ -121,7 +126,7 @@
 		productsLoading = true;
 		const { data, error } = await supabase
 			.from('products')
-			.select('id, name, description, price, active, product_categories(category_id, categories(id, name))')
+			.select('id, name, description, price, active, image_url, product_categories(category_id, categories(id, name))')
 			.order('name', { ascending: true });
 		if (error) {
 			toastsStore.error(error.message || 'Error al cargar productos');
@@ -284,17 +289,55 @@
 	const openNewProduct = () => {
 		targetProductId = null;
 		editingProductId = null;
-		productForm = { name: '', base_price: 0, active: true, category_ids: [], groups: [] };
+		productForm = { name: '', base_price: 0, active: true, image_url: '', category_ids: [], groups: [] };
 		detailDrawerOpen = true;
 	};
 
-	const openEditProduct = (id: string) => {
+	const uploadProductImage = async (file: File): Promise<string | null> => {
+		const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+		const path = `product-images/${crypto.randomUUID()}.${ext}`;
+		const { data, error } = await supabase.storage.from(PRODUCT_IMAGES_BUCKET).upload(path, file, {
+			cacheControl: '3600',
+			upsert: false,
+			contentType: file.type || 'image/jpeg'
+		});
+		if (error) {
+			console.error('Supabase Storage upload error:', error);
+			const msg = error.message || 'Error al subir la imagen';
+			toastsStore.error(msg);
+			return null;
+		}
+		const { data: urlData } = supabase.storage.from(PRODUCT_IMAGES_BUCKET).getPublicUrl(data.path);
+		return urlData.publicUrl;
+	};
+
+	const onProductImageChange = async (e: Event) => {
+		const input = e.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file || !file.type.startsWith('image/')) {
+			if (file) toastsStore.error('Elegí una imagen (JPG, PNG, etc.)');
+			return;
+		}
+		productImageUploading = true;
+		const previousUrl = productForm.image_url?.trim() || '';
+		const url = await uploadProductImage(file);
+		if (url) {
+			if (previousUrl) await removeStorageFileIfOurs(PRODUCT_IMAGES_BUCKET, previousUrl);
+			productForm = { ...productForm, image_url: url };
+		}
+		productImageUploading = false;
+		input.value = '';
+	};
+
+	const openEditProduct = async (id: string) => {
 		const product = products.find((p) => p.id === id);
 		if (!product) return;
 		targetProductId = id;
 		editingProductId = id;
 		const categoryIds = 'product_categories' in product ? getProductCategoryIds(product as SupabaseProduct) : [];
-		productForm = { name: product.name, base_price: getProductPrice(product) as number, active: product.active, category_ids: categoryIds, groups: productForm.groups };
+		const imageUrl = (product as SupabaseProduct).image_url?.trim() ?? '';
+		const groups = await loadProductGroupAssignments(id);
+		productForm = { name: product.name, base_price: getProductPrice(product) as number, active: product.active, image_url: imageUrl, category_ids: categoryIds, groups };
 		// Abrir el drawer en el siguiente ciclo para que bits-ui reciba el cambio
 		setTimeout(() => {
 			detailDrawerOpen = true;
@@ -318,6 +361,7 @@
 						description: parsed.data.name,
 						price: parsed.data.base_price,
 						active: parsed.data.active,
+						image_url: productForm.image_url?.trim() || null,
 						updated_at: new Date().toISOString()
 					})
 					.eq('id', editingProductId);
@@ -338,6 +382,18 @@
 						productForm.groups.map((g) => ({ product_id: editingProductId, group_id: g.group_id, max_select: g.max_select }))
 					);
 				}
+				// Actualizar lista local de inmediato (incl. image_url) para que al reabrir el editor se vea la foto
+				const imageUrl = productForm.image_url?.trim() || null;
+				products = products.map((p) =>
+					p.id === editingProductId
+						? { ...p, name: parsed.data.name, description: parsed.data.name, price: parsed.data.base_price, active: parsed.data.active, image_url: imageUrl }
+						: p
+				);
+				supabaseProducts = supabaseProducts.map((p) =>
+					p.id === editingProductId
+						? { ...p, name: parsed.data.name, description: parsed.data.name, price: parsed.data.base_price, active: parsed.data.active, image_url: imageUrl }
+						: p
+				);
 				toastsStore.success('Producto actualizado');
 				await loadSupabaseProducts();
 			} else {
@@ -353,7 +409,8 @@
 						name: parsed.data.name,
 						description: parsed.data.name,
 						price: parsed.data.base_price,
-						active: parsed.data.active
+						active: parsed.data.active,
+						image_url: productForm.image_url?.trim() || null
 					})
 					.select('id')
 					.single();
@@ -384,6 +441,8 @@
 		savingProduct = false;
 		detailDrawerOpen = false;
 		productDialogOpen = false;
+		editingProductId = null;
+		targetProductId = null;
 	};
 
 	const removeProduct = async (id: string) => {
@@ -517,10 +576,12 @@
 	$effect(() => {
 		if (selectedProduct && detailDrawerOpen) {
 			const categoryIds = 'product_categories' in selectedProduct ? getProductCategoryIds(selectedProduct as SupabaseProduct) : [];
+			const imageUrl = (selectedProduct as SupabaseProduct).image_url?.trim() ?? '';
 			productForm = {
 				name: selectedProduct.name,
 				base_price: getProductPrice(selectedProduct),
 				active: selectedProduct.active,
+				image_url: imageUrl,
 				category_ids: categoryIds,
 				groups: []
 			};
@@ -556,44 +617,48 @@
 </script>
 
 <div class="space-y-4">
-	<div class="flex items-center justify-between">
-		<button class="btn-primary" onclick={openNewProduct}>+ Add New Product</button>
+	<div class="panel flex items-center justify-between p-4">
+		<div>
+			<h1 class="text-base font-semibold">Productos</h1>
+			<p class="text-xs text-slate-500 dark:text-slate-400">
+				Catálogo de productos, precios, categorías y grupos (sabores, opciones).
+			</p>
+		</div>
 		<div class="flex items-center gap-2">
-			<button class="btn-secondary !px-2 !py-1" title="Filter">⚙</button>
-			<button class="btn-secondary !px-2 !py-1" title="Sort">⇅</button>
-			<button class="btn-secondary !px-2 !py-1" title="Columns">☰</button>
-			<button class="btn-secondary">Statistic</button>
-			<button class="btn-secondary">Export</button>
+			<button class="btn-primary" onclick={openNewProduct}>+ Nuevo producto</button>
+			<button class="btn-secondary !px-2 !py-1" title="Filtros">⚙</button>
+			<button class="btn-secondary !px-2 !py-1" title="Ordenar">⇅</button>
+			<button class="btn-secondary !px-2 !py-1" title="Columnas">☰</button>
 		</div>
 	</div>
 
 	<div class="grid grid-cols-1 gap-4 md:grid-cols-3">
 		<div class="panel p-4">
-			<p class="text-sm text-slate-500 dark:text-slate-400">Total Product</p>
+			<p class="text-sm text-slate-500 dark:text-neutral-400">Total Product</p>
 			<p class="mt-1 text-4xl font-semibold">{totalProducts}</p>
 		</div>
 		<div class="panel p-4">
-			<p class="text-sm text-slate-500 dark:text-slate-400">Product Revenue</p>
+			<p class="text-sm text-slate-500 dark:text-neutral-400">Product Revenue</p>
 			<p class="mt-1 text-4xl font-semibold">{formatMoney(totalRevenue)}</p>
 		</div>
 		<div class="panel p-4">
-			<p class="text-sm text-slate-500 dark:text-slate-400">Product Sold</p>
+			<p class="text-sm text-slate-500 dark:text-neutral-400">Product Sold</p>
 			<p class="mt-1 text-4xl font-semibold">{totalSold}</p>
 		</div>
 	</div>
 
 	<section class="panel p-4">
 		{#if productsLoading}
-			<p class="py-8 text-center text-sm text-slate-500 dark:text-slate-400">Cargando…</p>
+			<p class="py-8 text-center text-sm text-slate-500 dark:text-neutral-400">Cargando…</p>
 		{:else if products.length === 0}
-			<p class="py-8 text-center text-sm text-slate-500 dark:text-slate-400">
+			<p class="py-8 text-center text-sm text-slate-500 dark:text-neutral-400">
 				No hay productos. Creá uno con «+ Add New Product».
 			</p>
 		{:else}
 			<!-- Búsqueda global: nombre, descripción, categoría. Al cambiar, resetear página. -->
 			{#if browser}
 				<div class="mb-4">
-					<label for="products-search" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Buscar</label>
+					<label for="products-search" class="block text-sm font-medium text-slate-700 dark:text-neutral-300">Buscar</label>
 					<input
 						id="products-search"
 						type="search"
@@ -611,22 +676,23 @@
 			{/if}
 
 			{#if !browser}
-				<div class="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400">
+				<div class="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400">
 					Cargando tabla…
 				</div>
 			{:else if !table}
-				<div class="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400">
+				<div class="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500 dark:border-neutral-800 dark:bg-neutral-900 dark:text-neutral-400">
 					Cargando tabla…
 				</div>
 			{:else}
 				<div class="overflow-auto">
 					<table class="min-w-full text-sm">
-						<thead class="sticky top-0 z-10 bg-slate-50 dark:bg-slate-800">
+						<thead class="sticky top-0 z-10 bg-slate-50 dark:bg-neutral-900">
 							<tr>
+								<th class="w-14 px-2 py-2 text-left font-medium text-slate-600 dark:text-neutral-300" scope="col">Foto</th>
 								<th class="px-3 py-2 text-left">
 									<button
 										type="button"
-										class="flex items-center gap-1 font-medium hover:text-slate-700 dark:hover:text-slate-200"
+										class="flex items-center gap-1 font-medium hover:text-slate-700 dark:hover:text-neutral-200"
 										onclick={() => setSort('name')}
 									>
 										Nombre {SortIcon('name')}
@@ -635,7 +701,7 @@
 								<th class="px-3 py-2 text-left">
 									<button
 										type="button"
-										class="flex items-center gap-1 font-medium hover:text-slate-700 dark:hover:text-slate-200"
+										class="flex items-center gap-1 font-medium hover:text-slate-700 dark:hover:text-neutral-200"
 										onclick={() => setSort('category')}
 									>
 										Categoría {SortIcon('category')}
@@ -644,16 +710,16 @@
 								<th class="px-3 py-2 text-left">
 									<button
 										type="button"
-										class="flex items-center gap-1 font-medium hover:text-slate-700 dark:hover:text-slate-200"
+										class="flex items-center gap-1 font-medium hover:text-slate-700 dark:hover:text-neutral-200"
 										onclick={() => setSort('code')}
 									>
 										Código {SortIcon('code')}
 									</button>
 								</th>
-								<th class="px-3 py-2 text-left">
+								<th class="px-3 py-2 text-right">
 									<button
 										type="button"
-										class="flex items-center gap-1 font-medium hover:text-slate-700 dark:hover:text-slate-200"
+										class="ml-auto flex items-center justify-end gap-1 font-medium hover:text-slate-700 dark:hover:text-neutral-200"
 										onclick={() => setSort('price')}
 									>
 										Precio {SortIcon('price')}
@@ -662,26 +728,45 @@
 								<th class="px-3 py-2 text-right">
 									<button
 										type="button"
-										class="ml-auto flex items-center gap-1 font-medium hover:text-slate-700 dark:hover:text-slate-200"
+										class="ml-auto flex items-center gap-1 font-medium hover:text-slate-700 dark:hover:text-neutral-200"
 										onclick={() => setSort('state')}
 									>
 										Estado {SortIcon('state')}
 									</button>
 								</th>
-								<th class="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Acciones</th>
+								<th class="px-3 py-2 text-right font-medium text-slate-600 dark:text-neutral-300">Acciones</th>
 							</tr>
 						</thead>
 						<tbody>
 							{#each paginatedRows as row}
 								{@const product = row.original}
 								{@const meta = buildMeta(product, row.index)}
-								<tr class="border-t border-slate-100 transition hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/40">
+								<tr class="border-t border-slate-100 transition hover:bg-slate-50 dark:border-neutral-800 dark:hover:bg-neutral-900/60">
+									<td class="w-14 px-2 py-2 align-middle">
+										{#if product.image_url?.trim()}
+											<img
+												src={product.image_url}
+												alt=""
+												class="h-10 w-10 rounded-md object-cover border border-slate-200 dark:border-neutral-700"
+												loading="lazy"
+											/>
+										{:else}
+											<div
+												class="flex h-10 w-10 items-center justify-center rounded-md border border-slate-200 bg-slate-100 text-slate-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-400"
+												title="Sin imagen"
+											>
+												<svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+													<path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+												</svg>
+											</div>
+										{/if}
+									</td>
 									<td class="px-3 py-2">
 										<button
 											type="button"
-											class="cursor-pointer text-left font-medium text-slate-900 underline-offset-2 hover:underline hover:text-slate-700 dark:text-slate-100 dark:hover:text-slate-300"
+											class="cursor-pointer text-left font-medium text-slate-900 underline-offset-2 hover:underline hover:text-slate-700 dark:text-neutral-100 dark:hover:text-neutral-300"
 											title="Clic para editar"
-											onclick={() => openEditProduct(product.id)}
+											onclick={() => void openEditProduct(product.id)}
 										>
 											{product.name}
 										</button>
@@ -693,7 +778,7 @@
 												<div class="flex flex-wrap gap-1">
 													{#each catNames as name}
 														<span
-															class="inline-flex rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-600 dark:text-slate-200"
+															class="inline-flex rounded-full bg-slate-200 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-neutral-600 dark:text-neutral-200"
 														>
 															{name}
 														</span>
@@ -707,7 +792,7 @@
 										{/if}
 									</td>
 									<td class="px-3 py-2">{meta.code}</td>
-									<td class="px-3 py-2">{formatMoney(getProductPrice(product))}</td>
+									<td class="px-3 py-2 text-right">{formatMoney(getProductPrice(product))}</td>
 									<td class="px-3 py-2 text-right">
 										<span
 											class="inline-flex rounded-full px-2 py-1 text-xs font-medium"
@@ -717,14 +802,24 @@
 											class:text-slate-600={!product.active}
 											class:dark:bg-emerald-900={product.active}
 											class:dark:text-emerald-200={product.active}
-											class:dark:bg-slate-700={!product.active}
-											class:dark:text-slate-400={!product.active}
+											class:dark:bg-neutral-800={!product.active}
+											class:dark:text-neutral-400={!product.active}
 										>
 											{product.active ? 'Activo' : 'Inactivo'}
 										</span>
 									</td>
-									<td class="px-3 py-2">
-										<button class="btn-secondary !px-2 !py-1 text-xs" onclick={() => openEditProduct(product.id)}>Editar</button>
+									<td class="px-3 py-2 text-right">
+										<button
+											type="button"
+											title="Editar"
+											aria-label="Editar"
+											class="inline-flex h-8 w-8 items-center justify-center rounded border border-slate-200 text-slate-600 transition hover:bg-slate-100 dark:border-neutral-600 dark:text-neutral-300 dark:hover:bg-neutral-800"
+											onclick={() => void openEditProduct(product.id)}
+										>
+											<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+												<path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+											</svg>
+										</button>
 									</td>
 								</tr>
 							{/each}
@@ -752,12 +847,12 @@
 	<Dialog.Portal>
 		<Dialog.Overlay class="fixed inset-0 z-40 bg-black/30" />
 		<Dialog.Content
-			class="fixed right-0 top-0 z-50 flex h-screen w-[500px] max-w-[95vw] flex-col border-l border-slate-200 bg-white shadow-xl dark:border-slate-700 dark:bg-slate-900"
+			class="fixed right-0 top-0 z-50 flex h-screen w-[500px] max-w-[95vw] flex-col border-l border-slate-200 bg-white shadow-xl dark:border-neutral-800 dark:bg-black"
 		>
-			<div class="flex shrink-0 items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+			<div class="flex shrink-0 items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-neutral-800">
 				<h2 class="text-lg font-semibold">{selectedProduct ? 'Editar producto' : 'Nuevo producto'}</h2>
 				<Dialog.Close
-					class="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+					class="inline-flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-neutral-900 dark:hover:text-neutral-200"
 					aria-label="Cerrar"
 				>
 					<svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -769,6 +864,60 @@
 			<div class="min-h-0 flex-1 overflow-y-auto p-4">
 			{#if selectedProduct || (editingProductId === null && targetProductId === null)}
 				<div class="space-y-3">
+					<div class="block space-y-2">
+						<span class="text-sm font-medium">Imagen del producto</span>
+						<p class="text-xs text-slate-500 dark:text-neutral-400">Una sola imagen por producto en el front. Se muestra cuadrada (recorte al centro).</p>
+						<input
+							id="product-image-input"
+							type="file"
+							accept="image/*"
+							class="sr-only"
+							disabled={productImageUploading}
+							onchange={onProductImageChange}
+						/>
+						<div class="flex flex-col items-start gap-2">
+							{#if productForm.image_url}
+								<div class="relative inline-block">
+									<div class="h-32 w-32 overflow-hidden rounded-lg border border-slate-200 dark:border-neutral-700">
+										<img
+											src={productForm.image_url}
+											alt="Vista previa"
+											class="h-full w-full object-cover object-center"
+										/>
+									</div>
+									<button
+										type="button"
+										class="absolute -right-1 -top-1 flex h-6 w-6 items-center justify-center rounded-full bg-slate-700 text-white shadow hover:bg-slate-800 dark:bg-neutral-600 dark:hover:bg-neutral-700"
+										title="Quitar imagen"
+										aria-label="Quitar imagen"
+										onclick={() => (productForm = { ...productForm, image_url: '' })}
+									>
+										<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+									</button>
+									<label
+										for="product-image-input"
+										class="mt-1.5 inline-flex cursor-pointer items-center gap-1 text-xs font-medium text-slate-600 underline-offset-2 hover:underline dark:text-neutral-400 dark:hover:text-neutral-300"
+										tabindex="0"
+									>
+										<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+										Actualizar foto
+									</label>
+								</div>
+							{:else}
+								<label
+									for="product-image-input"
+									class="flex h-32 w-32 cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-slate-300 text-sm text-slate-600 transition hover:border-slate-400 hover:bg-slate-50 dark:border-neutral-600 dark:text-neutral-400 dark:hover:border-neutral-500 dark:hover:bg-neutral-800/50"
+								>
+									{#if productImageUploading}
+										<span class="animate-pulse text-xs">Subiendo…</span>
+									{:else}
+										<svg class="h-8 w-8 text-slate-400 dark:text-neutral-500" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" /></svg>
+										<span>Subir imagen</span>
+									{/if}
+								</label>
+							{/if}
+						</div>
+					</div>
 					<label class="block space-y-1">
 						<span class="text-sm font-medium">Nombre</span>
 						<input class="input" bind:value={productForm.name} />
@@ -776,7 +925,7 @@
 					{#if useSupabase && supabaseProducts.length > 0 && categoriesList.length > 0}
 						<div class="block space-y-2">
 							<span class="text-sm font-medium">Categorías</span>
-							<div class="max-h-40 space-y-2 overflow-y-auto rounded-lg border border-slate-200 p-2 dark:border-slate-700">
+							<div class="max-h-40 space-y-2 overflow-y-auto rounded-lg border border-slate-200 p-2 dark:border-neutral-800">
 								{#each categoriesList as cat}
 									<label class="flex cursor-pointer items-center gap-2 text-sm">
 										<input
@@ -800,10 +949,10 @@
 					</label>
 				</div>
 
-				<div class="mt-6 border-t border-slate-200 pt-4 dark:border-slate-700">
+				<div class="mt-6 border-t border-slate-200 pt-4 dark:border-neutral-800">
 					<div class="mb-3">
 						<h3 class="text-base font-semibold">Grupos de opciones</h3>
-						<p class="text-xs text-slate-500 dark:text-slate-400">
+						<p class="text-xs text-slate-500 dark:text-neutral-400">
 							{#if useSupabase && supabaseProducts.length > 0}
 								Asigná los grupos (ej. Sabores) y el número máximo de ítems que el cliente puede elegir (ej. máx. 2 sabores).
 							{:else if selectedProduct}
@@ -816,11 +965,11 @@
 
 					{#if useSupabase && supabaseProducts.length > 0}
 						{#if productGroupsList.length === 0}
-							<div class="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+							<div class="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500 dark:border-neutral-800 dark:text-neutral-400">
 								No hay grupos definidos. Creálos en la sección <strong>Grupos</strong> del menú.
 							</div>
 						{:else}
-							<div class="max-h-48 space-y-2 overflow-y-auto rounded-lg border border-slate-200 p-2 dark:border-slate-700">
+							<div class="max-h-48 space-y-2 overflow-y-auto rounded-lg border border-slate-200 p-2 dark:border-neutral-800">
 								{#each productGroupsList as grp}
 									<div class="flex items-center gap-2 text-sm">
 										<label class="flex cursor-pointer flex-1 items-center gap-2">
@@ -833,7 +982,7 @@
 										</label>
 										{#if isGroupSelected(grp.id)}
 											<label class="flex shrink-0 items-center gap-1.5 text-xs" title="Máximo de ítems que el cliente puede elegir (ej. sabores)">
-												<span class="whitespace-nowrap text-slate-500 dark:text-slate-400">Máx. a elegir:</span>
+												<span class="whitespace-nowrap text-slate-500 dark:text-neutral-400">Máx. a elegir:</span>
 												<input
 													type="number"
 													min="1"
@@ -850,17 +999,17 @@
 						{/if}
 					{:else}
 						{#if groups.length === 0}
-							<div class="rounded-lg border border-dashed border-slate-300 p-4 text-sm dark:border-slate-700">
+							<div class="rounded-lg border border-dashed border-slate-300 p-4 text-sm dark:border-neutral-800">
 								Aún no hay grupos (solo para productos del almacén local).
 							</div>
 						{:else}
 							<div class="space-y-3">
 								{#each groups as group}
-									<div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+									<div class="rounded-lg border border-slate-200 p-3 dark:border-neutral-800">
 										<div class="flex items-center justify-between">
 											<div>
 												<p class="text-sm font-semibold">{group.name}</p>
-												<p class="text-xs text-slate-500 dark:text-slate-400">
+												<p class="text-xs text-slate-500 dark:text-neutral-400">
 													min {group.min_select} / max {group.max_select}
 												</p>
 											</div>
@@ -875,18 +1024,18 @@
 											</div>
 										</div>
 										{#if expandedGroupId === group.id}
-											<div class="mt-3 space-y-2 border-t border-slate-200 pt-3 dark:border-slate-700">
+											<div class="mt-3 space-y-2 border-t border-slate-200 pt-3 dark:border-neutral-800">
 												<div class="flex items-center justify-between">
-													<p class="text-xs font-medium text-slate-600 dark:text-slate-300">Opciones</p>
+													<p class="text-xs font-medium text-slate-600 dark:text-neutral-300">Opciones</p>
 													<button class="btn-secondary !px-2 !py-1 text-xs" onclick={() => openOptionDialog(group.id)}>
 														Nueva opción
 													</button>
 												</div>
 												{#each optionsByGroup(group.id) as option}
-													<div class="flex items-center justify-between rounded border border-slate-200 px-2 py-1 text-sm dark:border-slate-700">
+													<div class="flex items-center justify-between rounded border border-slate-200 px-2 py-1 text-sm dark:border-neutral-800">
 														<div>
 															<p class="font-medium">{option.name}</p>
-															<p class="text-xs text-slate-500 dark:text-slate-400">
+															<p class="text-xs text-slate-500 dark:text-neutral-400">
 																Delta: {formatMoney(option.price_delta)} - {option.active ? 'Activa' : 'Inactiva'}
 															</p>
 														</div>
@@ -907,7 +1056,7 @@
 			</div>
 
 			{#if selectedProduct || (editingProductId === null && targetProductId === null)}
-				<div class="flex shrink-0 justify-between gap-3 border-t border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+				<div class="flex shrink-0 justify-between gap-3 border-t border-slate-200 bg-white p-4 dark:border-neutral-800 dark:bg-black">
 					{#if selectedProduct}
 						<button
 							class="btn-danger"
@@ -930,8 +1079,8 @@
 <Dialog.Root bind:open={deleteConfirmOpen}>
 	<Dialog.Portal>
 		<Dialog.Overlay class="fixed inset-0 z-50 bg-black/40" />
-		<Dialog.Content class="fixed left-1/2 top-1/2 z-[60] w-full max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-xl border border-slate-200 bg-white p-4 shadow-xl dark:border-slate-700 dark:bg-slate-900">
-			<p class="mb-4 text-sm text-slate-600 dark:text-slate-300">
+		<Dialog.Content class="fixed left-1/2 top-1/2 z-[60] w-full max-w-sm -translate-x-1/2 -translate-y-1/2 rounded-xl border border-slate-200 bg-white p-4 shadow-xl dark:border-neutral-800 dark:bg-black">
+			<p class="mb-4 text-sm text-slate-600 dark:text-neutral-300">
 				¿Está seguro que desea eliminar este producto?
 			</p>
 			<div class="flex justify-end gap-2">
@@ -956,7 +1105,7 @@
 <Dialog.Root bind:open={productDialogOpen}>
 	<Dialog.Portal>
 		<Dialog.Overlay class="fixed inset-0 z-40 bg-black/40" />
-		<Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg bg-white p-4 dark:bg-slate-900">
+		<Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg bg-white p-4 dark:bg-black">
 			<h3 class="mb-3 text-lg font-semibold">{editingProductId ? 'Editar producto' : 'Nuevo producto'}</h3>
 			<div class="space-y-3">
 				<label class="block space-y-1">
@@ -983,7 +1132,7 @@
 <Dialog.Root bind:open={groupDialogOpen}>
 	<Dialog.Portal>
 		<Dialog.Overlay class="fixed inset-0 z-40 bg-black/40" />
-		<Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg bg-white p-4 dark:bg-slate-900">
+		<Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg bg-white p-4 dark:bg-black">
 			<h3 class="mb-3 text-lg font-semibold">Nuevo grupo</h3>
 			<div class="space-y-3">
 				<label class="block space-y-1">
@@ -1016,7 +1165,7 @@
 <Dialog.Root bind:open={optionDialogOpen}>
 	<Dialog.Portal>
 		<Dialog.Overlay class="fixed inset-0 z-40 bg-black/40" />
-		<Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg bg-white p-4 dark:bg-slate-900">
+		<Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg bg-white p-4 dark:bg-black">
 			<h3 class="mb-3 text-lg font-semibold">Nueva opción</h3>
 			<div class="space-y-3">
 				<label class="block space-y-1">

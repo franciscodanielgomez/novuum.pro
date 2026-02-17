@@ -1,39 +1,77 @@
 import type { Customer } from '$lib/types';
-import { generateId, isoNow } from '$lib/utils';
-import { seedCustomers } from './seeds';
-import { readStorage, writeStorage } from './storage';
+import { supabase } from '$lib/supabase/client';
 
-const KEY = 'customers';
-
-const ensureSeed = () => {
-	const current = readStorage<Customer[]>(KEY, []);
-	if (current.length === 0) {
-		writeStorage(KEY, seedCustomers);
-		return seedCustomers;
-	}
-	return current;
+type Row = {
+	id: string;
+	phone: string;
+	address: string;
+	between_streets: string | null;
+	notes: string | null;
+	created_at: string;
 };
 
+function rowToCustomer(row: Row): Customer {
+	return {
+		id: row.id,
+		phone: row.phone,
+		address: row.address,
+		betweenStreets: row.between_streets ?? undefined,
+		notes: row.notes ?? undefined,
+		createdAt: row.created_at
+	};
+}
+
 export const customersRepo = {
-	async list() {
-		return ensureSeed();
+	async list(): Promise<Customer[]> {
+		const { data, error } = await supabase
+			.from('customers')
+			.select('id, phone, address, between_streets, notes, created_at')
+			.order('created_at', { ascending: false });
+		if (error) throw error;
+		return (data ?? []).map(rowToCustomer);
 	},
-	async create(payload: Omit<Customer, 'id' | 'createdAt'>) {
-		const all = ensureSeed();
-		const entity: Customer = { id: generateId('cus'), createdAt: isoNow(), ...payload };
-		const next = [entity, ...all];
-		writeStorage(KEY, next);
-		return entity;
+
+	async create(payload: Omit<Customer, 'id' | 'createdAt'>): Promise<Customer> {
+		const { data, error } = await supabase
+			.from('customers')
+			.insert({
+				phone: payload.phone,
+				address: payload.address,
+				between_streets: payload.betweenStreets?.trim() || null,
+				notes: payload.notes?.trim() || null
+			})
+			.select('id, phone, address, between_streets, notes, created_at')
+			.single();
+		if (error) throw error;
+		return rowToCustomer(data as Row);
 	},
-	async update(id: string, payload: Partial<Customer>) {
-		const all = ensureSeed();
-		const next = all.map((c) => (c.id === id ? { ...c, ...payload } : c));
-		writeStorage(KEY, next);
-		return next.find((c) => c.id === id) ?? null;
+
+	async update(id: string, payload: Partial<Omit<Customer, 'id' | 'createdAt'>>): Promise<Customer | null> {
+		const updates: Partial<Record<keyof Row, unknown>> = {};
+		if (payload.phone !== undefined) updates.phone = payload.phone;
+		if (payload.address !== undefined) updates.address = payload.address;
+		if (payload.betweenStreets !== undefined) updates.between_streets = payload.betweenStreets?.trim() || null;
+		if (payload.notes !== undefined) updates.notes = payload.notes?.trim() || null;
+		if (Object.keys(updates).length === 0) {
+			const { data } = await supabase
+				.from('customers')
+				.select('id, phone, address, between_streets, notes, created_at')
+				.eq('id', id)
+				.single();
+			return data ? rowToCustomer(data as Row) : null;
+		}
+		const { data, error } = await supabase
+			.from('customers')
+			.update(updates)
+			.eq('id', id)
+			.select('id, phone, address, between_streets, notes, created_at')
+			.single();
+		if (error) throw error;
+		return data ? rowToCustomer(data as Row) : null;
 	},
-	async remove(id: string) {
-		const all = ensureSeed();
-		const next = all.filter((c) => c.id !== id);
-		writeStorage(KEY, next);
+
+	async remove(id: string): Promise<void> {
+		const { error } = await supabase.from('customers').delete().eq('id', id);
+		if (error) throw error;
 	}
 };

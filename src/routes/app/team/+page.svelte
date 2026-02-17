@@ -69,7 +69,7 @@
 			columns={columns}
 			rowId={(r) => r.id}
 			globalSearch={{ keys: ['name', 'email', 'role'], placeholder: 'Buscar por nombre o email' }}
-			actions={[{ label: 'Editar', onClick: openEdit, variant: 'secondary' }]}
+			actions={[{ label: 'Editar', onClick: openEdit, variant: 'secondary', icon: 'edit' }]}
 			emptyMessage="No hay miembros cargados. Si deberías ver datos, probá cerrar sesión y volver a entrar."
 			loading={loading}
 			persistState={true}

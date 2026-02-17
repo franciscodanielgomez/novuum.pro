@@ -45,6 +45,16 @@
 	});
 </script>
 
+<div class="space-y-4">
+	<div class="panel flex items-center justify-between p-4">
+		<div>
+			<h1 class="text-base font-semibold">Caja</h1>
+			<p class="text-xs text-slate-500 dark:text-slate-400">
+				Abrir y cerrar turno, y ver totales por forma de pago del turno actual.
+			</p>
+		</div>
+	</div>
+
 <div class="grid grid-cols-1 gap-4 xl:grid-cols-12">
 	<section class="panel xl:col-span-4 p-4">
 		<h2 class="text-base font-semibold">Estado de caja</h2>
@@ -120,4 +130,5 @@
 			</div>
 		{/if}
 	</section>
+</div>
 </div>
