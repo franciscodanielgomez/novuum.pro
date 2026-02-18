@@ -20,15 +20,10 @@ jobs:
       - name: Verificar secreto de firma (TAURI_PRIVATE_KEY)
         run: |
           if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
-            Write-Error "Falta el secreto TAURI_PRIVATE_KEY. En el repo: Settings → Secrets and variables → Actions → New repository secret. Nombre: TAURI_PRIVATE_KEY."
+            Write-Error "Falta el secreto TAURI_PRIVATE_KEY. En el repo: Settings → Secrets and variables → Actions → New repository secret. Nombre: TAURI_PRIVATE_KEY. Valor: pegar todo el bloque 'Private' que muestra 'npx tauri signer generate' (puede ser varias lineas)."
             exit 1
           }
-          $key = $env:TAURI_SIGNING_PRIVATE_KEY.Trim()
-          if ($key.StartsWith("-") -or $key.StartsWith("untrusted")) {
-            Write-Error "TAURI_PRIVATE_KEY tiene formato incorrecto. Debe ser SOLO la linea base64 de la clave (empieza con RWS...). No incluir lineas 'untrusted comment' ni '-----BEGIN...'. Ejecuta 'tauri signer generate' y copia solo la segunda linea (la base64) al secreto."
-            exit 1
-          }
-          echo "Secreto TAURI_PRIVATE_KEY configurado (formato OK)."
+          echo "Secreto TAURI_PRIVATE_KEY configurado."
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
 
@@ -60,7 +55,12 @@ jobs:
           npm run desktop:icons
 
       - name: Build Tauri (MSI + updater artifacts)
-        run: npm run tauri build
+        run: |
+          # Normalizar clave: quitar guiones/espacios al pegar y dejar todo en UNA linea (el decoder falla con saltos de linea o caracteres extra)
+          $raw = $env:TAURI_SIGNING_PRIVATE_KEY
+          $key = $raw.Trim() -replace '^[\s\-]+|[\s\-]+$', '' -replace "`r`n|`n|`r", ''
+          $env:TAURI_SIGNING_PRIVATE_KEY = $key
+          npm run tauri build
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
