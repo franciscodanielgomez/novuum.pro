@@ -1,0 +1,90 @@
+# Release automático: al pushear un tag vX.Y.Z se construye el MSI en Windows,
+# se crea/actualiza el GitHub Release y se suben .msi, .msi.sig y latest.json (updater).
+name: Release Tauri (Windows MSI)
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'src-tauri -> target'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run check (types/lint)
+        run: npm run check
+
+      - name: Build Tauri (MSI + updater artifacts)
+        run: npm run tauri build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+
+      - name: Generate latest.json for updater
+        id: updater
+        run: |
+          $version = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          $msiDir = "src-tauri/target/release/bundle/msi"
+          $msi = Get-ChildItem -Path $msiDir -Filter "*.msi" | Select-Object -First 1
+          if (-not $msi) { Write-Error "No .msi found in $msiDir"; exit 1 }
+          $sigPath = "$($msi.FullName).sig"
+          if (-not (Test-Path $sigPath)) { Write-Error "No .sig found for $($msi.Name)"; exit 1 }
+          $signature = Get-Content $sigPath -Raw
+          $baseUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
+          $msiNameEncoded = [System.Uri]::EscapeDataString($msi.Name)
+          $url = "$baseUrl/$msiNameEncoded"
+          $json = @{
+            version = $version
+            notes = ""
+            pub_date = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+            platforms = @{
+              "windows-x86_64" = @{
+                url = $url
+                signature = $signature.Trim()
+              }
+            }
+          } | ConvertTo-Json -Depth 4 -Compress
+          $json | Set-Content -Path "$msiDir/latest.json" -Encoding utf8NoBOM
+          echo "msi_name=$($msi.Name)" >> $env:GITHUB_OUTPUT
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Create Release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: |
+            Instalador Windows (MSI) para Novum POS.
+            Descargar el archivo `.msi` y ejecutarlo para instalar.
+          draft: false
+          files: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/msi/*.msi.sig
+            src-tauri/target/release/bundle/msi/latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

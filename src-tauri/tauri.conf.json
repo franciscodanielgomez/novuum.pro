@@ -48,10 +48,10 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "TODO_REEMPLAZAR_CON_PUBKEY_TRAS_tauri_signer_generate",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDBCMjc3QjA1MDRFM0QzRDEKUldUUjArTUVCWHNuQzk2bHg0RlltYkV0TEFNeXg4dlBrTnZJQ0cyZ0JxVUt5ZndCYkNJQTU1RHUK",
       "endpoints": [
-        "https://github.com/TU_USUARIO/TU_REPO/releases/latest/download/latest.json"
-      ]
+  "https://github.com/franciscodanielgomez/novuum.pro/releases/latest/download/latest.json"
+]
     }
   }
 }

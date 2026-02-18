@@ -13,8 +13,8 @@ Frontend MVP (desktop-first, responsive) para reemplazar el sistema legacy de de
 3. **Build MSI (Windows)**  
    `npm run tauri:build` (o `npm run desktop:build`). Salida en `src-tauri/target/release/bundle/msi/`.
 
-4. **Auto-update**  
-   Solo en Desktop. Ver sección [Auto-update](#auto-update-solo-desktop): generar keys, configurar `pubkey` y `endpoints` en `tauri.conf.json`, publicar release en GitHub con `latest.json` y firmar el build.
+4. **Release automático**  
+   Al pushear un tag `vX.Y.Z`, el CI construye el MSI en Windows y publica el [GitHub Release](.github/workflows/release.yml) con el instalador y el manifest del updater. Ver [Auto-update](#auto-update-solo-desktop) para claves y configuración.
 
 ## Stack
 
@@ -166,35 +166,59 @@ Al iniciar la app desktop se busca una actualización en segundo plano; además 
 
 La app no se actualiza sola; el usuario debe pulsar **Descargar e instalar**. Tras instalar, la app se cierra y podés abrirla de nuevo.
 
-### Cómo publicar una nueva versión
+### Release automático (GitHub Actions)
 
-1. **Generar claves de firma** (una vez por proyecto):
+Al pushear un **tag** `vX.Y.Z`, el workflow [`.github/workflows/release.yml`](.github/workflows/release.yml):
+
+1. Ejecuta `npm run check` y construye Tauri en Windows.
+2. Genera el instalador `.msi` y el `.msi.sig` (firma para el updater).
+3. Genera `latest.json` (manifest del updater).
+4. Crea o actualiza el GitHub Release del tag y sube como assets: `.msi`, `.msi.sig`, `latest.json`.
+
+**Para publicar una versión:**
+
+1. Actualizá la versión en `src-tauri/tauri.conf.json` (campo `version`, ej. `"0.1.1"`). Opcionalmente sincronizá `package.json`.
+2. Creá el tag y subilo:
    ```bash
-   npm run tauri signer generate -w ~/.tauri/novum.key
+   git tag v0.1.1
+   git push origin v0.1.1
    ```
-   Guardá la clave privada en un lugar seguro. La **clave pública** tenés que ponerla en `src-tauri/tauri.conf.json` → `plugins.updater.pubkey` (reemplazá el `TODO_REEMPLAZAR_CON_PUBKEY_TRAS_tauri_signer_generate`).
+3. El CI corre en Windows, construye el MSI, firma con la clave configurada y publica el release.
 
-2. **Configurar el endpoint en `tauri.conf.json`:**
-   - `plugins.updater.endpoints`: URL del JSON de actualizaciones. Para **GitHub Releases** podés usar:
-     `https://github.com/TU_USUARIO/TU_REPO/releases/latest/download/latest.json`
-   - Reemplazá `TU_USUARIO` y `TU_REPO` por tu repo.
+**Secretos en GitHub (Settings → Secrets and variables → Actions):**
 
-3. **Build firmado:** antes de hacer el build, configurá la clave privada (no uses `.env` para la clave):
-   ```bash
-   export TAURI_SIGNING_PRIVATE_KEY="ruta/o/contenido/de/la/clave/privada"
-   # opcional si la clave tiene contraseña:
-   export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
-   npm run tauri:build
-   ```
+- **`TAURI_PRIVATE_KEY`**: contenido de la clave privada de firma (o ruta; la que usás en `TAURI_SIGNING_PRIVATE_KEY` en local).
+- **`TAURI_KEY_PASSWORD`** (opcional): contraseña de la clave si la definiste al generarla.
 
-4. **Subir el release a GitHub:**
-   - Creá un tag (ej. `v0.1.1`) y un GitHub Release.
-   - Subí el `.msi` (y el `.msi.sig` que generó Tauri en `src-tauri/target/release/bundle/msi/`).
-   - Creá un archivo **latest.json** con el formato que pide Tauri (versión, `platforms.windows-x86_64.url` y `platforms.windows-x86_64.signature` con el contenido del `.sig`). Subilo como asset del release con nombre `latest.json`.
-   - La URL del endpoint será del estilo:  
-     `https://github.com/USUARIO/REPO/releases/latest/download/latest.json`
+`GITHUB_TOKEN` lo provee GitHub; el workflow necesita permisos `contents: write` para crear el release y subir assets.
 
-5. **Probar el updater:** instalá una versión anterior (ej. la que generaste antes del nuevo release). Abrí la app; en unos segundos debería aparecer "Nueva versión X.X.X disponible" en el menú de perfil o en Configuraciones. Pulsá **Descargar e instalar**; la app se cierra y el instalador aplica la actualización.
+### Descarga del instalador
 
-**Web – enlace a Desktop:** en la versión web, el botón "Descargar versión Desktop" / "Descargar Desktop" apunta por defecto a `https://github.com/TU_USUARIO/TU_REPO/releases/latest`. Para cambiarlo, definí en `.env`:  
-`VITE_DESKTOP_DOWNLOAD_URL=https://github.com/tu-org/tu-repo/releases/latest`
+- **Página del último release:**  
+  `https://github.com/<OWNER>/<REPO>/releases/latest`  
+  Ahí se listan el `.msi` y el resto de los assets; el usuario elige qué descargar.
+
+- **Descarga directa del MSI** (el nombre depende de versión e idioma, ej. `Novum POS_0.1.0_x64_es-AR.msi`):  
+  `https://github.com/<OWNER>/<REPO>/releases/latest/download/<NOMBRE_MSI>`  
+  Si querés un enlace fijo en la web, podés usar esta URL en `VITE_DESKTOP_DOWNLOAD_URL` sabiendo que el nombre del MSI puede cambiar entre versiones; si no querés hardcodear el nombre, usá `/releases/latest` y mostrá instrucciones (“Ir a la última release y descargar el archivo .msi”).
+
+### Updater: pubkey, keys y manifest
+
+- **Claves:** una vez por proyecto generás un par con `npm run tauri signer generate -w ~/.tauri/novum.key`. La **clave pública** va en `src-tauri/tauri.conf.json` → `plugins.updater.pubkey` (reemplazando el `TODO_REEMPLAZAR_CON_PUBKEY_TRAS_tauri_signer_generate`). La **clave privada** se usa en CI como secreto `TAURI_PRIVATE_KEY` (y opcionalmente `TAURI_KEY_PASSWORD`).
+- **Endpoint:** en `tauri.conf.json`, `plugins.updater.endpoints` debe apuntar al manifest, ej.:  
+  `https://github.com/<OWNER>/<REPO>/releases/latest/download/latest.json`
+- **Manifest `latest.json`:** lo genera el workflow de release a partir del `.msi` y del `.msi.sig`. Incluye la versión, la URL del MSI y la firma; la app desktop lo usa para comprobar y descargar actualizaciones.
+
+### Probar el updater
+
+Con una versión anterior instalada, abrí la app; en unos segundos debería aparecer "Nueva versión X.X.X disponible" en el menú de perfil o en Configuraciones. Pulsá **Descargar e instalar**; la app se cierra y el instalador aplica la actualización.
+
+### Web – enlace a Desktop
+
+El botón "Descargar versión Desktop" / "Descargar Desktop" apunta por defecto a la **página** del último release:  
+`https://github.com/TU_USUARIO/TU_REPO/releases/latest`  
+(así el usuario ve los assets e instrucciones sin depender del nombre exacto del MSI).
+
+Para cambiarlo, definí en `.env`:  
+`VITE_DESKTOP_DOWNLOAD_URL=https://github.com/tu-org/tu-repo/releases/latest`  
+(o la URL directa del `.msi` si preferís enlace de descarga directa).
