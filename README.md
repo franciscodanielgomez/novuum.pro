@@ -35,7 +35,8 @@ npm install
 npm run dev
 ```
 
-Abrir `http://localhost:5173`.
+
+1. Abrir `http://localhost:5173`.
 
 ### Probar impresión (web)
 
