@@ -5,6 +5,13 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_updater::UpdaterExt;
 
 #[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+/// Oculta la ventana de consola al ejecutar PowerShell (impresión silenciosa).
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(windows)]
 fn list_printers_windows() -> Result<Vec<String>, String> {
     let output = std::process::Command::new("powershell")
         .args([
@@ -12,6 +19,7 @@ fn list_printers_windows() -> Result<Vec<String>, String> {
             "-Command",
             "Get-Printer | Select-Object -ExpandProperty Name",
         ])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| e.to_string())?;
     if !output.status.success() {
@@ -67,6 +75,7 @@ fn print_ticket_windows(text: &str, printer_name: Option<&str>) -> Result<(), St
 
     let output = std::process::Command::new("powershell")
         .args(["-NoProfile", "-Command", &cmd])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| e.to_string())?;
 
