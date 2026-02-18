@@ -49,6 +49,11 @@ jobs:
       - name: Run check (types/lint)
         run: npm run check
 
+      - name: Generar íconos (PNG desde SVG, luego Tauri)
+        run: |
+          npm run icons:generate
+          npm run desktop:icons
+
       - name: Build Tauri (MSI + updater artifacts)
         run: npm run tauri build
         env:

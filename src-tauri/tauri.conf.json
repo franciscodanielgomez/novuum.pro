@@ -1,5 +1,5 @@
 {
-  "productName": "Novum",
+  "productName": "Novuum",
   "version": "0.1.0",
   "identifier": "com.novum.pos",
   "build": {
@@ -12,7 +12,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Novum POS",
+        "title": "Novuum POS",
         "width": 1280,
         "height": 800,
         "minWidth": 800,
@@ -44,8 +44,8 @@
         }
       }
     },
-    "longDescription": "POS Novum - Punto de venta",
-    "shortDescription": "POS Novum",
+    "longDescription": "POS Novuum - Punto de venta",
+    "shortDescription": "POS Novuum",
     "category": "Business"
   },
   "plugins": {
