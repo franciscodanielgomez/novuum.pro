@@ -223,3 +223,11 @@ Si no definís `VITE_GITHUB_REPO`, se usa el fallback:
 
 - **`VITE_DESKTOP_DOWNLOAD_URL`**: URL fija (p. ej. la página `https://github.com/owner/repo/releases/latest` o la URL directa de un `.msi`).
 - Si tampoco está definida, se usa `https://github.com/TU_USUARIO/TU_REPO/releases/latest`.
+
+
+--
+
+git tag v0.1.4       
+git push origin v0.1.4
+
+--

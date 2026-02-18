@@ -109,8 +109,8 @@ fn get_app_version(app: AppHandle) -> String {
 
 #[tauri::command]
 async fn check_update(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
-    let builder = app.updater_builder().map_err(|e| e.to_string())?;
-    let update = builder.build().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())?;
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let update = updater.check().await.map_err(|e| e.to_string())?;
     Ok(update.map(|u| UpdateInfo {
         version: u.version,
         date: u.date.map(|d| d.to_string()),
@@ -120,9 +120,8 @@ async fn check_update(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
 
 #[tauri::command]
 async fn download_and_install_update(app: AppHandle) -> Result<(), String> {
-    let builder = app.updater_builder().map_err(|e| e.to_string())?;
-    let upd = builder.build().map_err(|e| e.to_string())?;
-    let update = upd.check().await.map_err(|e| e.to_string())?;
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let update = updater.check().await.map_err(|e| e.to_string())?;
     let Some(update) = update else {
         return Err("No hay actualización disponible".to_string());
     };
