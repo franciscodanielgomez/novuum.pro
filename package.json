@@ -20,7 +20,7 @@
 	},
 	"devDependencies": {
 		"@playwright/test": "^1.58.2",
-		"@sveltejs/adapter-static": "^5.0.2",
+		"@sveltejs/adapter-static": "^3.0.0",
 		"@sveltejs/adapter-auto": "^7.0.0",
 		"@tauri-apps/cli": "^2.2.0",
 		"cross-env": "^7.0.2",
