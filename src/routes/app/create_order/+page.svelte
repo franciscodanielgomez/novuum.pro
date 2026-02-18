@@ -71,8 +71,10 @@
 	let configGroups: ProductOptionGroup[] = [];
 	/** Opciones por grupo cuando se cargan desde Supabase (product_group_items) */
 	let supabaseOptionsByGroup = $state<Record<string, ConfigOption[]>>({});
-	let selectionsByGroup: Record<string, string[]> = {};
-	let optionQtyById: Record<string, number> = {};
+	/** Nombre de categoría por id de ítem (para mostrar debajo del nombre en el modal) */
+	let configOptionCategoryName = $state<Record<string, string>>({});
+	let selectionsByGroup = $state<Record<string, string[]>>({});
+	let optionQtyById = $state<Record<string, number>>({});
 	/** ID del draft cuyo menú de tres puntos está abierto */
 	let draftMenuOpenId = $state<string | null>(null);
 	/** ID del draft a eliminar (muestra modal de confirmación) */
@@ -325,6 +327,7 @@
 					paymentMethod: 'CASH',
 					total: 0,
 					items: [],
+					createdByUserId: $sessionStore.user?.id,
 					cashierNameSnapshot: $sessionStore.user?.name,
 					shiftId: $sessionStore.shift?.id
 				});
@@ -369,12 +372,55 @@
 			? supabaseSkus.filter((sku) => sku.productId === productId)
 			: $catalogStore.skus.filter((sku) => sku.productId === productId);
 
-	const getConfigOptions = (groupId: string): ConfigOption[] =>
-		supabaseOptionsByGroup[groupId]?.length
-			? supabaseOptionsByGroup[groupId].filter((o) => o.active)
-			: $productsOptionsState.getOptionsByGroup(groupId).filter((option) => option.active);
+	const getConfigOptions = (groupId: string): ConfigOption[] => {
+		const raw =
+			supabaseOptionsByGroup[groupId]?.length
+				? supabaseOptionsByGroup[groupId].filter((o) => o.active)
+				: $productsOptionsState.getOptionsByGroup(groupId).filter((option) => option.active);
+		return [...raw].sort((a, b) => {
+			const catA = (configOptionCategoryName[a.id] ?? '').toLowerCase();
+			const catB = (configOptionCategoryName[b.id] ?? '').toLowerCase();
+			if (catA !== catB) return catA.localeCompare(catB);
+			return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+		});
+	};
+
+	/** Colores por categoría (mismo nombre = mismo color) para agrupar visualmente */
+	const CATEGORY_CHIP_CLASSES = [
+		'bg-amber-500/90 text-white',
+		'bg-emerald-600/90 text-white',
+		'bg-sky-600/90 text-white',
+		'bg-violet-600/90 text-white',
+		'bg-rose-500/90 text-white',
+		'bg-orange-500/90 text-white',
+		'bg-teal-600/90 text-white',
+		'bg-indigo-600/90 text-white',
+		'bg-fuchsia-600/90 text-white',
+		'bg-cyan-600/90 text-white'
+	] as const;
+	const getCategoryChipClass = (categoryName: string): string => {
+		let h = 0;
+		for (let i = 0; i < categoryName.length; i++) h = (h << 5) - h + categoryName.charCodeAt(i);
+		const idx = Math.abs(h) % CATEGORY_CHIP_CLASSES.length;
+		return CATEGORY_CHIP_CLASSES[idx];
+	};
+
+	const configSelectedNamesList = $derived.by(() =>
+		configGroups.flatMap((g) => {
+			const ids = selectionsByGroup[g.id] ?? [];
+			const opts = getConfigOptions(g.id);
+			return ids.map((id) => opts.find((o) => o.id === id)?.name).filter((n): n is string => Boolean(n));
+		})
+	);
+
+	const totalQtyForGroup = (groupId: string) =>
+		(selectionsByGroup[groupId] ?? []).reduce(
+			(sum, id) => sum + Math.max(1, optionQtyById[id] ?? 1),
+			0
+		);
 
 	const toggleOption = (group: ProductOptionGroup, optionId: string) => {
+		configError = '';
 		const current = selectionsByGroup[group.id] ?? [];
 		if (group.max_select === 1) {
 			selectionsByGroup = { ...selectionsByGroup, [group.id]: [optionId] };
@@ -387,7 +433,15 @@
 			};
 			return;
 		}
-		if (current.length >= group.max_select) return;
+		if (current.length >= group.max_select) {
+			configError = `Máximo ${group.max_select} en ${group.name}. Quitá uno antes de agregar otro.`;
+			return;
+		}
+		const total = totalQtyForGroup(group.id);
+		if (total >= group.max_select) {
+			configError = `Ya llegaste al máximo (${group.max_select}) en ${group.name}.`;
+			return;
+		}
 		selectionsByGroup = { ...selectionsByGroup, [group.id]: [...current, optionId] };
 	};
 
@@ -407,10 +461,10 @@
 				const groupIds = assignments.map((a) => a.group_id);
 				const [groupsRes, itemsRes] = await Promise.all([
 					supabase.from('product_groups').select('id, name, sort_order').in('id', groupIds),
-					supabase.from('product_group_items').select('id, group_id, name, sort_order, active').in('group_id', groupIds).order('sort_order', { ascending: true }).order('name', { ascending: true })
+					supabase.from('product_group_items').select('id, group_id, parent_id, name, sort_order, active, image_url').in('group_id', groupIds).order('sort_order', { ascending: true }).order('name', { ascending: true })
 				]);
 				const groupsData = (groupsRes.data ?? []) as { id: string; name: string; sort_order: number }[];
-				const itemsData = (itemsRes.data ?? []) as { id: string; group_id: string; name: string; sort_order: number; active: boolean }[];
+				const itemsData = (itemsRes.data ?? []) as { id: string; group_id: string; parent_id: string | null; name: string; sort_order: number; active: boolean; image_url?: string | null }[];
 				const now = new Date().toISOString();
 				const groups: ProductOptionGroup[] = groupsData.map((g) => {
 					const assignment = assignments.find((a) => a.group_id === g.id);
@@ -425,9 +479,14 @@
 						updated_at: now
 					};
 				}).sort((a, b) => a.sort_order - b.sort_order);
-				const optionsByGroup: Record<string, ConfigOption[]> = {};
+				const categoryNameById: Record<string, string> = {};
 				for (const item of itemsData) {
-					if (!item.active) continue;
+					if (item.parent_id == null) categoryNameById[item.id] = item.name;
+				}
+				const optionsByGroup: Record<string, ConfigOption[]> = {};
+				const optionCategoryName: Record<string, string> = {};
+				for (const item of itemsData) {
+					if (!item.active || item.parent_id == null) continue;
 					const opt: ConfigOption = {
 						id: item.id,
 						group_id: item.group_id,
@@ -435,15 +494,19 @@
 						price_delta: 0,
 						active: true,
 						sort_order: item.sort_order ?? 0,
+						image_url: item.image_url ?? undefined,
 						created_at: now,
 						updated_at: now
 					};
 					if (!optionsByGroup[item.group_id]) optionsByGroup[item.group_id] = [];
 					optionsByGroup[item.group_id].push(opt);
+					const catName = categoryNameById[item.parent_id];
+					if (catName) optionCategoryName[item.id] = catName;
 				}
 				configTarget = { sku, product };
 				configGroups = groups;
 				supabaseOptionsByGroup = optionsByGroup;
+				configOptionCategoryName = optionCategoryName;
 				selectionsByGroup = Object.fromEntries(groups.map((g) => [g.id, []]));
 				optionQtyById = {};
 				configOpen = true;
@@ -460,6 +523,7 @@
 		configTarget = { sku, product };
 		configGroups = groups;
 		supabaseOptionsByGroup = {};
+		configOptionCategoryName = {};
 		configError = '';
 		selectionsByGroup = Object.fromEntries(groups.map((g) => [g.id, []]));
 		optionQtyById = {};
@@ -609,16 +673,17 @@
 			changeDue: activeDraft.paymentMethod === 'CASH' ? changeDue : undefined,
 			notes: activeDraft.notes,
 			total,
+			createdByUserId: $sessionStore.user?.id,
 			cashierNameSnapshot: $sessionStore.user?.name,
 			shiftId: $sessionStore.shift?.id,
 			items: activeDraft.cart
 		};
 		if (activeDraft.orderId) {
 			await ordersStore.update(activeDraft.orderId, payload);
-			toastsStore.success(`Pedido confirmado: ${activeDraft.orderId}`);
+			toastsStore.success('Pedido confirmado');
 		} else {
 			const created = await ordersStore.create(payload);
-			toastsStore.success(`Pedido creado: ${created.id}`);
+			toastsStore.success(`Pedido #${created.orderNumber} creado`);
 		}
 		const confirmedId = activeDraftId;
 		const currentIndex = draftsStore.current.findIndex((d) => d.id === confirmedId);
@@ -749,6 +814,7 @@
 							paymentMethod: 'CASH',
 							total: 0,
 							items: [],
+							createdByUserId: $sessionStore.user?.id,
 							cashierNameSnapshot: $sessionStore.user?.name,
 							shiftId: $sessionStore.shift?.id
 						});
@@ -807,15 +873,17 @@
 					</button>
 				{:else}
 					{#each draftsList as draft, index}
+						{@const isActive = activeDraftId === draft.id}
 						<div
-							class="relative flex min-w-[150px] flex-col rounded-xl border p-2 transition-colors"
-							class:ring-2={activeDraftId === draft.id}
-							class:ring-blue-500={activeDraftId === draft.id}
-							class:border-blue-500={activeDraftId === draft.id}
+							class="relative flex min-w-[150px] flex-col rounded-xl border p-2 transition-colors {isActive
+								? 'border-neutral-800 bg-neutral-900 text-white dark:border-slate-400 dark:bg-slate-100 dark:text-slate-900'
+								: 'border-slate-200 dark:border-neutral-600'}"
 						>
 							<button
 								type="button"
-								class="absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-200/80 hover:text-slate-600 dark:hover:bg-neutral-700 dark:hover:text-neutral-200"
+								class="absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-lg transition-colors {isActive
+									? 'text-slate-300 hover:bg-white/20 hover:text-white dark:text-slate-600 dark:hover:bg-slate-800/30 dark:hover:text-slate-900'
+									: 'text-slate-400 hover:bg-slate-200/80 hover:text-slate-600 dark:hover:bg-neutral-700 dark:hover:text-neutral-200'}"
 								aria-label="Opciones del pedido"
 								title="Opciones"
 								onclick={(e) => {
@@ -831,7 +899,7 @@
 							</button>
 							{#if draftMenuOpenId === draft.id}
 								<div
-									class="absolute right-1 top-9 z-20 min-w-[140px] rounded-lg border border-slate-200 bg-white py-1 shadow-lg dark:border-neutral-700 dark:bg-neutral-800"
+									class="absolute right-1 bottom-full z-30 mb-1 min-w-[120px] rounded-lg border border-slate-200 bg-white py-1.5 shadow-lg dark:border-neutral-700 dark:bg-neutral-800"
 									role="menu"
 								>
 									<button
@@ -844,31 +912,35 @@
 											deleteDraftConfirmId = draft.id;
 										}}
 									>
-										<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+										<svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 											<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
 											<path d="M10 11v6M14 11v6" />
 										</svg>
-										Eliminar borrador
+										Eliminar
 									</button>
 								</div>
 							{/if}
 							<button
 								type="button"
-								class="flex min-w-0 flex-1 flex-col gap-0.5 text-left hover:bg-slate-50 dark:hover:bg-neutral-800/50"
+								class="flex min-w-0 flex-1 flex-col gap-0.5 text-left {isActive
+									? 'hover:bg-white/5 dark:hover:bg-slate-800/30'
+									: 'hover:bg-slate-50 dark:hover:bg-neutral-800/50'}"
 								onclick={() => {
 									draftMenuOpenId = null;
 									activeDraftId = draft.id;
 								}}
 							>
 								<div class="min-w-0 flex-1 pr-6">
-									<p class="truncate text-sm font-semibold">{draftCustomer(draft)?.phone ?? '—'}</p>
-									<p class="mt-0.5 line-clamp-2 text-xs leading-tight text-slate-500 dark:text-slate-400">
+									<p class="truncate text-sm font-semibold {isActive ? 'text-white dark:text-slate-900' : ''}">{draftCustomer(draft)?.phone ?? '—'}</p>
+									<p class="mt-0.5 line-clamp-2 text-xs leading-tight {isActive ? 'text-slate-300 dark:text-slate-600' : 'text-slate-500 dark:text-slate-400'}">
 										{draftCustomer(draft)?.address ?? 'Sin dirección'}
 									</p>
 								</div>
 								<div class="mt-0.5 flex w-full items-center justify-between gap-2">
-									<span class="text-xs text-slate-500 dark:text-slate-400">#{index + 1}</span>
-									<span class="ml-auto shrink-0 rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-800 dark:bg-violet-900/50 dark:text-violet-200">
+									<span class="text-xs {isActive ? 'text-slate-400 dark:text-slate-500' : 'text-slate-500 dark:text-slate-400'}">#{index + 1}</span>
+									<span class="ml-auto shrink-0 rounded-full px-2 py-0.5 text-xs font-medium {isActive
+										? 'bg-white/20 text-white dark:bg-slate-800/40 dark:text-slate-900'
+										: 'bg-violet-100 text-violet-800 dark:bg-violet-900/50 dark:text-violet-200'}">
 										Borrador
 									</span>
 								</div>
@@ -962,24 +1034,23 @@
 				<div class="grid grid-cols-2 gap-3 sm:grid-cols-[repeat(auto-fill,minmax(10rem,1fr))]">
 					{#each products as product}
 						{#each findSkusByProduct(product.id) as sku}
-							<div class="flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-600 dark:bg-slate-800">
-								<div class="relative aspect-square w-full shrink-0 overflow-hidden rounded-t-2xl bg-slate-100 dark:bg-slate-700">
-									<img
-										class="h-full w-full object-cover"
-										src={product.imageUrl ?? `https://placehold.co/400x533?text=${encodeURIComponent(product.name.slice(0, 12))}`}
-										alt={product.name}
-									/>
-								</div>
-								<div class="flex flex-1 flex-col gap-2 p-3">
-									<p class="line-clamp-2 text-xs font-bold uppercase tracking-wide text-slate-900 dark:text-slate-100">
+							<div class="relative aspect-square w-full overflow-hidden rounded-2xl border border-slate-200 shadow-sm dark:border-slate-600">
+								<img
+									class="absolute inset-0 h-full w-full object-cover"
+									src={product.imageUrl ?? `https://placehold.co/400x533?text=${encodeURIComponent(product.name.slice(0, 12))}`}
+									alt={product.name}
+								/>
+								<!-- Degradado + título, precio y selector sobre la imagen -->
+								<div class="absolute inset-x-0 bottom-0 flex flex-col gap-1.5 px-3 pb-3 pt-10 bg-gradient-to-t from-black/90 via-black/50 to-transparent">
+									<p class="line-clamp-2 text-xs font-bold uppercase tracking-wide text-white drop-shadow-sm">
 										{product.name}
 									</p>
-									<div class="mt-auto flex min-w-0 items-center justify-between gap-2">
-										<span class="min-w-0 truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{formatMoney(sku.price)}</span>
-										<div class="shrink-0 inline-flex overflow-hidden rounded-lg border border-slate-300 bg-blue-600 dark:border-slate-500">
+									<div class="flex min-w-0 items-center justify-between gap-2">
+										<span class="min-w-0 truncate text-sm font-semibold text-white drop-shadow-sm">{formatMoney(sku.price)}</span>
+										<div class="shrink-0 inline-flex overflow-hidden rounded-lg border border-white/30 bg-white/20 backdrop-blur-sm">
 											<button
 												type="button"
-												class="flex h-7 w-6 shrink-0 items-center justify-center text-white transition-opacity hover:opacity-90"
+												class="flex h-7 w-6 shrink-0 items-center justify-center text-white transition-opacity hover:bg-white/20"
 												aria-label="Restar"
 												onclick={() => decSku(sku)}
 											>
@@ -990,7 +1061,7 @@
 											</span>
 											<button
 												type="button"
-												class="flex h-7 w-6 shrink-0 items-center justify-center text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+												class="flex h-7 w-6 shrink-0 items-center justify-center text-white transition-opacity hover:bg-white/20 disabled:opacity-50"
 												aria-label="Sumar"
 												disabled={configLoading}
 												onclick={() => void openConfig(sku, product)}
@@ -1210,53 +1281,124 @@
 <Dialog.Root bind:open={configOpen}>
 	<Dialog.Portal>
 		<Dialog.Overlay class="fixed inset-0 z-40 bg-black/50" />
-		<Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-full max-w-2xl -translate-x-1/2 -translate-y-1/2 rounded-lg bg-white p-4 dark:bg-black">
+		<Dialog.Content class="fixed left-1/2 top-1/2 z-50 w-full max-w-5xl -translate-x-1/2 -translate-y-1/2 rounded-lg bg-white p-4 dark:bg-black">
 			<div class="mb-3 flex items-center justify-between">
-				<h3 class="text-lg font-semibold">Configurar producto</h3>
+				<h3 class="text-lg font-semibold">
+					Configurar {configGroups.length === 1 ? configGroups[0]?.name ?? 'producto' : 'producto'}
+				</h3>
 				<Dialog.Close class="btn-secondary">Cerrar</Dialog.Close>
 			</div>
 			{#if configTarget}
 				<p class="mb-3 text-sm text-slate-500 dark:text-slate-400">
-					{configTarget.product.name} - {configTarget.sku.label}
+					{configTarget.product.name} - {configTarget.sku.label}{#if configSelectedNamesList.length}: {configSelectedNamesList.join(', ')}{/if}
+					{' '}
+					{#if configGroups.length === 1}
+						{@const g = configGroups[0]}
+						{totalQtyForGroup(g.id)}/{g.max_select}
+					{:else}
+						{#each configGroups as g, i}{g.name} {totalQtyForGroup(g.id)}/{g.max_select}{#if i < configGroups.length - 1}, {/if}{/each}
+					{/if}
 				</p>
 			{/if}
 
 			<div class="max-h-[60vh] space-y-4 overflow-auto">
 				{#each configGroups as group}
-					<div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
-						<div class="mb-2 flex items-center justify-between">
-							<p class="font-medium">{group.name}</p>
-							<p class="text-xs text-slate-500 dark:text-slate-400">
-								min {group.min_select} / max {group.max_select}
-							</p>
-						</div>
-						<div class="space-y-2">
+					<div class="{configGroups.length > 1 ? 'rounded-lg border border-slate-200 p-3 dark:border-slate-700' : ''}">
+						{#if configGroups.length > 1}
+							<p class="mb-2 text-sm font-medium text-slate-600 dark:text-slate-400">{group.name} {totalQtyForGroup(group.id)}/{group.max_select}</p>
+						{/if}
+						<div class="grid grid-cols-7 gap-2">
 							{#each getConfigOptions(group.id) as opt}
-								<div class="flex items-center justify-between rounded border border-slate-200 px-2 py-1 text-sm dark:border-slate-700">
-									<label class="flex items-center gap-2">
-										<input
-											type={group.max_select === 1 ? 'radio' : 'checkbox'}
-											checked={(selectionsByGroup[group.id] ?? []).includes(opt.id)}
-											onchange={() => toggleOption(group, opt.id)}
-										/>
-										<span>{opt.name}</span>
-										<span class="text-xs text-slate-500 dark:text-slate-400">
-											{opt.price_delta >= 0 ? '+' : ''}
-											{formatMoney(opt.price_delta)}
-										</span>
-									</label>
-									<div class="flex items-center gap-2">
-										<span class="text-xs text-slate-500 dark:text-slate-400">Qty</span>
-										<input
-											class="input !w-16 !py-1 text-xs"
-											type="number"
-											min="1"
-											value={optionQtyById[opt.id] ?? 1}
-											oninput={(e) => {
-												const next = Number((e.currentTarget as HTMLInputElement).value) || 1;
-												optionQtyById = { ...optionQtyById, [opt.id]: Math.max(1, next) };
-											}}
-										/>
+								{@const isSelected = (selectionsByGroup[group.id] ?? []).includes(opt.id)}
+								<div
+									class="relative aspect-square w-full overflow-hidden rounded-lg bg-slate-200 dark:bg-neutral-700"
+									role="button"
+									tabindex="0"
+									onclick={() => toggleOption(group, opt.id)}
+									onkeydown={(e) => e.key === 'Enter' && toggleOption(group, opt.id)}
+								>
+									{#if opt.image_url}
+										<img src={opt.image_url} alt="" class="absolute inset-0 z-0 h-full w-full object-cover" />
+									{:else}
+										<div class="absolute inset-0 z-0 flex items-center justify-center text-slate-400 text-2xl">—</div>
+									{/if}
+									<div
+										class="absolute inset-0 z-10 bg-gradient-to-t from-black/85 via-black/30 to-transparent"
+										aria-hidden="true"
+									></div>
+									<div class="absolute inset-0 z-20 flex flex-col justify-between p-2">
+										<div class="flex justify-end">
+											{#if isSelected}
+												<div
+													class="inline-flex shrink-0 overflow-hidden rounded-lg border border-white/30 bg-white/20 backdrop-blur-sm"
+													onclick={(e) => e.stopPropagation()}
+												>
+													<button
+														type="button"
+														class="flex h-7 w-6 shrink-0 items-center justify-center text-white transition-opacity hover:bg-white/20"
+														aria-label="Restar"
+														onclick={() => {
+															configError = '';
+															const currentQty = optionQtyById[opt.id] ?? 1;
+															if (currentQty <= 1) {
+																toggleOption(group, opt.id);
+															} else {
+																optionQtyById = { ...optionQtyById, [opt.id]: currentQty - 1 };
+															}
+														}}
+													>
+														<span class="text-sm font-medium leading-none">−</span>
+													</button>
+													<span class="flex min-w-[1.5rem] items-center justify-center border-x border-white/30 px-0.5 text-xs font-bold text-white">{(optionQtyById[opt.id] ?? 1)}</span>
+													<button
+														type="button"
+														class="flex h-7 w-6 shrink-0 items-center justify-center text-white transition-opacity hover:bg-white/20 disabled:opacity-50"
+														aria-label="Sumar cantidad"
+														disabled={totalQtyForGroup(group.id) >= group.max_select}
+														onclick={() => {
+															configError = '';
+															const total = totalQtyForGroup(group.id);
+															if (total >= group.max_select) {
+																configError = `Máximo ${group.max_select} en ${group.name}. No podés sumar más.`;
+																return;
+															}
+															const q = (optionQtyById[opt.id] ?? 1) + 1;
+															optionQtyById = { ...optionQtyById, [opt.id]: q };
+														}}
+													>
+														<span class="text-sm font-medium leading-none">+</span>
+													</button>
+												</div>
+											{:else}
+												{@const atLimit = (selectionsByGroup[group.id] ?? []).length >= group.max_select || totalQtyForGroup(group.id) >= group.max_select}
+												<button
+													type="button"
+													class="inline-flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/30 bg-white/20 text-white backdrop-blur-sm transition-opacity hover:bg-white/20 disabled:opacity-50 disabled:pointer-events-none"
+													aria-label="Agregar"
+													disabled={atLimit}
+													onclick={(e) => {
+														e.preventDefault();
+														e.stopPropagation();
+														if (atLimit) return;
+														toggleOption(group, opt.id);
+													}}
+												>
+													<span class="text-sm font-medium leading-none">+</span>
+												</button>
+											{/if}
+										</div>
+										<div class="flex flex-col">
+											<p class="mb-[3px] line-clamp-2 text-xs font-medium leading-tight text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
+												{opt.name}
+											</p>
+											{#if configOptionCategoryName[opt.id]}
+												<span
+													class="inline-block w-fit shrink-0 rounded-full px-2 py-0.5 text-[10px] leading-none {getCategoryChipClass(configOptionCategoryName[opt.id])}"
+												>
+													{configOptionCategoryName[opt.id]}
+												</span>
+											{/if}
+										</div>
 									</div>
 								</div>
 							{/each}

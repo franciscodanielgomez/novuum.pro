@@ -11,6 +11,25 @@
 	let sidebarCollapsed = $state(false);
 	let avatarMenuOpen = $state(false);
 	let businessMenuOpen = $state(false);
+	let avatarButtonRef: HTMLButtonElement | undefined = $state();
+	let avatarDropdownStyle = $state<{ bottom: string; left: string }>({ bottom: '0', left: '0' });
+
+	$effect(() => {
+		if (avatarMenuOpen && avatarButtonRef) {
+			const rect = avatarButtonRef.getBoundingClientRect();
+			avatarDropdownStyle = {
+				bottom: `${window.innerHeight - rect.top + 8}px`,
+				left: `${rect.left}px`
+			};
+		}
+	});
+
+	// Al abrir el POS (icono o +), colapsar el menú para dar más espacio
+	$effect(() => {
+		if ($page.url.pathname === '/app/create_order') {
+			sidebarCollapsed = true;
+		}
+	});
 
 	const goProfile = async () => {
 		avatarMenuOpen = false;
@@ -84,7 +103,7 @@
 <div class="flex h-screen overflow-hidden bg-slate-100 dark:bg-black">
 	<aside
 		class="flex h-screen shrink-0 flex-col overflow-y-auto border-r border-slate-200 bg-white transition-all dark:border-neutral-800 dark:bg-black"
-		class:w-64={!sidebarCollapsed}
+		class:w-52={!sidebarCollapsed}
 		class:w-20={sidebarCollapsed}
 	>
 		<div
@@ -271,6 +290,7 @@
 
 		<div class="relative mt-auto border-t border-slate-200 pt-4 pb-1 dark:border-neutral-800">
 			<button
+				bind:this={avatarButtonRef}
 				class="flex items-center text-left hover:bg-slate-100 dark:hover:bg-neutral-900"
 				class:w-full={!sidebarCollapsed}
 				class:rounded-lg={!sidebarCollapsed}
@@ -301,8 +321,8 @@
 						<p class="truncate text-sm font-medium text-slate-800 dark:text-neutral-100">
 							{$sessionStore.user?.name ?? 'Usuario'}
 						</p>
-						<p class="truncate text-xs text-slate-500 dark:text-neutral-400">
-							{$sessionStore.user?.email ?? ''}
+						<p class="truncate text-xs capitalize text-slate-500 dark:text-neutral-400">
+							{$sessionStore.user?.role ? $sessionStore.user.role.charAt(0) + $sessionStore.user.role.slice(1).toLowerCase() : ''}
 						</p>
 					</div>
 				{/if}
@@ -310,11 +330,8 @@
 
 			{#if avatarMenuOpen}
 				<div
-					class="absolute z-30 w-56 rounded-lg border border-slate-200 bg-white p-1 shadow-lg dark:border-neutral-700 dark:bg-black"
-					class:bottom-14={!sidebarCollapsed}
-					class:left-0={!sidebarCollapsed}
-					class:bottom-0={sidebarCollapsed}
-					class:left-[4.25rem]={sidebarCollapsed}
+					class="fixed z-50 w-56 rounded-lg border border-slate-200 bg-white p-1 shadow-lg dark:border-neutral-700 dark:bg-black"
+					style="bottom: {avatarDropdownStyle.bottom}; left: {avatarDropdownStyle.left};"
 				>
 					<button
 						class="block w-full rounded-md px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 dark:text-neutral-200 dark:hover:bg-neutral-900"

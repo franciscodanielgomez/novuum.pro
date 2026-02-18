@@ -1,5 +1,8 @@
 import { browser } from '$app/environment';
 
+/** Zona horaria usada en la app (Argentina) */
+export const APP_TIMEZONE = 'America/Argentina/Buenos_Aires';
+
 /** Solo dígitos 0-9 para teléfono de cliente */
 export const PHONE_REGEX = /^[0-9]+$/;
 
@@ -12,23 +15,48 @@ export const formatMoney = (value: number) =>
 	);
 
 export const nowHour = () =>
-	new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false });
+	new Date().toLocaleTimeString('es-AR', {
+		timeZone: APP_TIMEZONE,
+		hour: '2-digit',
+		minute: '2-digit',
+		hour12: false
+	});
 
 export const isoNow = () => new Date().toISOString();
 
-export const sameDate = (a: string, yyyyMmDd: string) => a.slice(0, 10) === yyyyMmDd;
+/** Fecha de un ISO en Argentina (YYYY-MM-DD) */
+export const dateInArgentinaYmd = (iso: string): string =>
+	new Date(iso).toLocaleDateString('en-CA', { timeZone: APP_TIMEZONE });
 
-export const todayYmd = () => new Date().toISOString().slice(0, 10);
+/** True si la fecha del ISO (en Argentina) coincide con yyyyMmDd */
+export const sameDate = (a: string, yyyyMmDd: string) => dateInArgentinaYmd(a) === yyyyMmDd;
 
-/** Formato dd/MM/yyyy - HH:mm para listados */
+/** Hoy en Argentina (YYYY-MM-DD) */
+export const todayYmd = () =>
+	new Date().toLocaleDateString('en-CA', { timeZone: APP_TIMEZONE });
+
+/** Formato dd/MM/yy - HH:mm para listados, en hora Argentina */
 export const formatDateTime = (iso: string) => {
 	const d = new Date(iso);
-	const day = String(d.getDate()).padStart(2, '0');
-	const month = String(d.getMonth() + 1).padStart(2, '0');
-	const year = d.getFullYear();
-	const h = String(d.getHours()).padStart(2, '0');
-	const m = String(d.getMinutes()).padStart(2, '0');
-	return `${day}/${month}/${year} - ${h}:${m}`;
+	const parts = new Intl.DateTimeFormat('es-AR', {
+		timeZone: APP_TIMEZONE,
+		day: '2-digit',
+		month: '2-digit',
+		year: '2-digit',
+		hour: '2-digit',
+		minute: '2-digit',
+		hour12: false
+	}).formatToParts(d);
+	const day = parts.find((p) => p.type === 'day')!.value;
+	const month = parts.find((p) => p.type === 'month')!.value;
+	const year = parts.find((p) => p.type === 'year')!.value;
+	const hour = parts.find((p) => p.type === 'hour')!.value;
+	const minute = parts.find((p) => p.type === 'minute')!.value;
+	return `${day}/${month}/${year} - ${hour}:${minute}`;
 };
+
+/** Número de pedido con ceros a la izquierda (ej. 5 → "000005") para búsqueda y visualización */
+const ORDER_NUMBER_PAD = 6;
+export const formatOrderNumber = (n: number) => String(n).padStart(ORDER_NUMBER_PAD, '0');
 
 export const isBrowser = () => browser;

@@ -22,6 +22,7 @@
 		name: string;
 		sort_order: number;
 		active: boolean;
+		image_url: string | null;
 		created_at: string;
 		updated_at: string;
 	};
@@ -42,8 +43,10 @@
 	let expandedCategories = $state<Set<string>>(new Set());
 	let editingItemId = $state<string | null>(null);
 	let editingItemName = $state('');
+	let editingItemImageUrl = $state('');
 	let savingItemEdit = $state(false);
 	let groupToDelete = $state<Group | null>(null);
+	let itemSearchQuery = $state('');
 
 	const selectedGroup = $derived(editingId ? groups.find((g) => g.id === editingId) ?? null : null);
 
@@ -79,7 +82,7 @@
 		groupItemsLoading = true;
 		const { data, error } = await supabase
 			.from('product_group_items')
-			.select('id, group_id, parent_id, name, sort_order, active, created_at, updated_at')
+			.select('id, group_id, parent_id, name, sort_order, active, image_url, created_at, updated_at')
 			.eq('group_id', groupId)
 			.order('sort_order', { ascending: true })
 			.order('name', { ascending: true });
@@ -102,6 +105,24 @@
 		groupItems
 			.filter((i) => i.parent_id === parentId)
 			.sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name));
+
+	const itemSearchLower = $derived(itemSearchQuery.trim().toLowerCase());
+	const filteredCategories = $derived(
+		itemSearchLower
+			? categories.filter(
+					(cat) =>
+						cat.name.toLowerCase().includes(itemSearchLower) ||
+						getChildren(cat.id).some((c) => c.name.toLowerCase().includes(itemSearchLower))
+				)
+			: categories
+	);
+	const getChildrenFiltered = (parentId: string) => {
+		const children = getChildren(parentId);
+		return itemSearchLower ? children.filter((c) => c.name.toLowerCase().includes(itemSearchLower)) : children;
+	};
+	const expandedForSearch = $derived(
+		itemSearchLower ? new Set(filteredCategories.map((c) => c.id)) : expandedCategories
+	);
 	const toggleCategory = (id: string) => {
 		expandedCategories = new Set(expandedCategories);
 		if (expandedCategories.has(id)) expandedCategories.delete(id);
@@ -209,22 +230,26 @@
 	const startEditItem = (item: GroupItem) => {
 		editingItemId = item.id;
 		editingItemName = item.name;
+		editingItemImageUrl = item.image_url ?? '';
 	};
 	const cancelEditItem = () => {
 		editingItemId = null;
 		editingItemName = '';
+		editingItemImageUrl = '';
 	};
 	const saveItemEdit = async () => {
 		const name = editingItemName.trim();
 		if (!name || !editingItemId) return;
 		savingItemEdit = true;
+		const imageUrl = editingItemImageUrl.trim() || null;
 		const { error } = await supabase
 			.from('product_group_items')
-			.update({ name, updated_at: new Date().toISOString() })
+			.update({ name, image_url: imageUrl, updated_at: new Date().toISOString() })
 			.eq('id', editingItemId);
 		savingItemEdit = false;
 		editingItemId = null;
 		editingItemName = '';
+		editingItemImageUrl = '';
 		if (error) {
 			toastsStore.error(error.message || 'Error al guardar');
 		} else {
@@ -365,7 +390,7 @@
 	<Dialog.Portal>
 		<Dialog.Overlay class="fixed inset-0 z-40 bg-black/30" />
 		<Dialog.Content
-			class="fixed right-0 top-0 z-50 flex h-screen w-[480px] max-w-[95vw] flex-col border-l border-slate-200 bg-white shadow-xl dark:border-neutral-800 dark:bg-black"
+			class="fixed right-0 top-0 z-50 flex h-screen w-1/2 min-w-[420px] max-w-[95vw] flex-col border-l border-slate-200 bg-white shadow-xl dark:border-neutral-800 dark:bg-black"
 		>
 			<div class="flex shrink-0 items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-neutral-800">
 				<h2 class="text-lg font-semibold">{selectedGroup?.name ?? 'Grupo'}</h2>
@@ -379,7 +404,7 @@
 				</Dialog.Close>
 			</div>
 
-			<div class="min-h-0 flex-1 overflow-y-auto p-4">
+			<div class="min-h-0 flex-1 overflow-y-auto p-5">
 				{#if selectedGroup}
 					<div class="space-y-3">
 						<label class="block space-y-1">
@@ -406,6 +431,16 @@
 						<p class="mb-3 text-xs text-slate-500 dark:text-slate-400">
 							Primero agregá categorías (ej. FRUTAS A LA CREMA, CHOCOLATES). Luego agregá ítems bajo cada categoría (ej. ANANA A LA CREMA, CHOCO. BLANCO).
 						</p>
+
+						<div class="mb-3">
+							<input
+								type="search"
+								class="input w-full"
+								placeholder="Buscar ítems o categorías…"
+								bind:value={itemSearchQuery}
+								aria-label="Buscar ítems o categorías"
+							/>
+						</div>
 
 						<div class="mb-4 space-y-2">
 							<input
@@ -451,48 +486,106 @@
 							<p class="rounded-lg border border-dashed border-slate-300 py-4 text-center text-sm text-slate-500 dark:border-slate-600">
 								Aún no hay categorías. Agregá una arriba con "Agregar como categoría".
 							</p>
+						{:else if itemSearchLower && filteredCategories.length === 0}
+							<p class="rounded-lg border border-dashed border-slate-300 py-4 text-center text-sm text-slate-500 dark:border-slate-600">
+								Ningún ítem o categoría coincide con la búsqueda.
+							</p>
 						{:else}
 							<ul class="space-y-1">
-								{#each categories as cat}
+								{#each filteredCategories as cat}
 									<li class="rounded-lg border border-slate-200 dark:border-neutral-800">
 										<div class="flex items-center gap-1 px-2 py-1.5">
 											<button
 												class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-slate-500 hover:bg-slate-100 dark:hover:bg-neutral-900"
 												onclick={() => toggleCategory(cat.id)}
-												aria-label={expandedCategories.has(cat.id) ? 'Contraer' : 'Expandir'}
+												aria-label={expandedForSearch.has(cat.id) ? 'Contraer' : 'Expandir'}
 											>
-												{#if expandedCategories.has(cat.id)}
+												{#if expandedForSearch.has(cat.id)}
 													<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 15l-6-6-6 6"/></svg>
 												{:else}
 													<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
 												{/if}
 											</button>
+											{#if editingItemId !== cat.id}
+												<div class="h-8 w-8 shrink-0 overflow-hidden rounded bg-slate-200 dark:bg-neutral-700">
+													{#if cat.image_url}
+														<img src={cat.image_url} alt="" class="h-full w-full object-cover" />
+													{:else}
+														<span class="flex h-full w-full items-center justify-center text-slate-400 text-xs">—</span>
+													{/if}
+												</div>
+											{/if}
 											{#if editingItemId === cat.id}
-												<input
-													class="input flex-1 !py-1 text-sm"
-													bind:value={editingItemName}
-													onkeydown={(e) => e.key === 'Enter' && saveItemEdit()}
-												/>
-												<button class="btn-primary !px-2 !py-0.5 text-xs" onclick={() => void saveItemEdit()} disabled={savingItemEdit}>Guardar</button>
-												<button class="btn-secondary !px-2 !py-0.5 text-xs" onclick={cancelEditItem}>Cancelar</button>
+												<div class="h-20 w-20 shrink-0 overflow-hidden rounded bg-slate-200 dark:bg-neutral-700">
+													{#if editingItemImageUrl.trim()}
+														<img src={editingItemImageUrl} alt="" class="h-full w-full object-cover" />
+													{:else}
+														<span class="flex h-full w-full items-center justify-center text-slate-400 text-xs">—</span>
+													{/if}
+												</div>
+												<div class="flex min-w-0 flex-1 flex-col gap-2">
+													<input
+														class="input w-full !py-1.5 text-sm"
+														placeholder="Nombre"
+														bind:value={editingItemName}
+														onkeydown={(e) => e.key === 'Enter' && saveItemEdit()}
+													/>
+													<input
+														class="input w-full !py-1.5 text-sm"
+														placeholder="URL de imagen"
+														bind:value={editingItemImageUrl}
+														onkeydown={(e) => e.key === 'Enter' && saveItemEdit()}
+													/>
+												</div>
+												<div class="flex shrink-0 flex-col gap-1">
+													<button class="btn-primary !px-2 !py-0.5 text-xs" onclick={() => void saveItemEdit()} disabled={savingItemEdit}>Guardar</button>
+													<button class="btn-secondary !px-2 !py-0.5 text-xs" onclick={cancelEditItem}>Cancelar</button>
+												</div>
 											{:else}
 												<span class="flex-1 font-semibold text-slate-800 dark:text-slate-200">{cat.name}</span>
 												<button class="btn-secondary !px-2 !py-0.5 text-xs" onclick={() => startEditItem(cat)}>Editar</button>
 												<button class="btn-danger !px-2 !py-0.5 text-xs" onclick={() => void removeItem(cat)}>Eliminar</button>
 											{/if}
 										</div>
-										{#if expandedCategories.has(cat.id)}
+										{#if expandedForSearch.has(cat.id)}
 											<ul class="border-t border-slate-100 bg-slate-50/50 pl-6 pr-2 py-1 dark:border-neutral-800 dark:bg-neutral-900/50">
-												{#each getChildren(cat.id) as child}
+												{#each getChildrenFiltered(cat.id) as child}
 													<li class="flex items-center justify-between gap-1 py-1.5 text-sm">
+														{#if editingItemId !== child.id}
+															<div class="h-8 w-8 shrink-0 overflow-hidden rounded bg-slate-200 dark:bg-neutral-700">
+																{#if child.image_url}
+																	<img src={child.image_url} alt="" class="h-full w-full object-cover" />
+																{:else}
+																	<span class="flex h-full w-full items-center justify-center text-slate-400 text-xs">—</span>
+																{/if}
+															</div>
+														{/if}
 														{#if editingItemId === child.id}
-															<input
-																class="input flex-1 !py-1 text-sm"
-																bind:value={editingItemName}
-																onkeydown={(e) => e.key === 'Enter' && saveItemEdit()}
-															/>
-															<button class="btn-primary !px-2 !py-0.5 text-xs shrink-0" onclick={() => void saveItemEdit()} disabled={savingItemEdit}>Guardar</button>
-															<button class="btn-secondary !px-2 !py-0.5 text-xs shrink-0" onclick={cancelEditItem}>Cancelar</button>
+															<div class="h-20 w-20 shrink-0 overflow-hidden rounded bg-slate-200 dark:bg-neutral-700">
+																{#if editingItemImageUrl.trim()}
+																	<img src={editingItemImageUrl} alt="" class="h-full w-full object-cover" />
+																{:else}
+																	<span class="flex h-full w-full items-center justify-center text-slate-400 text-xs">—</span>
+																{/if}
+															</div>
+															<div class="flex min-w-0 flex-1 flex-col gap-2">
+																<input
+																	class="input w-full !py-1.5 text-sm"
+																	placeholder="Nombre"
+																	bind:value={editingItemName}
+																	onkeydown={(e) => e.key === 'Enter' && saveItemEdit()}
+																/>
+																<input
+																	class="input w-full !py-1.5 text-sm"
+																	placeholder="URL de imagen"
+																	bind:value={editingItemImageUrl}
+																	onkeydown={(e) => e.key === 'Enter' && saveItemEdit()}
+																/>
+															</div>
+															<div class="flex shrink-0 flex-col gap-1">
+																<button class="btn-primary !px-2 !py-0.5 text-xs" onclick={() => void saveItemEdit()} disabled={savingItemEdit}>Guardar</button>
+																<button class="btn-secondary !px-2 !py-0.5 text-xs" onclick={cancelEditItem}>Cancelar</button>
+															</div>
 														{:else}
 															<span class="flex-1 text-slate-700 dark:text-slate-300">{child.name}</span>
 															<button class="btn-secondary !px-2 !py-0.5 text-xs shrink-0" onclick={() => startEditItem(child)}>Editar</button>
@@ -500,7 +593,7 @@
 														{/if}
 													</li>
 												{/each}
-												{#if getChildren(cat.id).length === 0}
+												{#if getChildrenFiltered(cat.id).length === 0}
 													<li class="py-1 text-xs text-slate-500 dark:text-slate-400">Sin ítems. Agregá uno con "Agregar ítem" eligiendo esta categoría.</li>
 												{/if}
 											</ul>

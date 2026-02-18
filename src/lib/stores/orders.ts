@@ -14,7 +14,7 @@ export const ordersStore = {
 			throw e;
 		}
 	},
-	create: async (payload: Omit<Order, 'id' | 'createdAt' | 'hour'>) => {
+	create: async (payload: Omit<Order, 'id' | 'orderNumber' | 'createdAt' | 'hour'>) => {
 		const created = await api.orders.create(payload);
 		await ordersStore.load();
 		return created;
@@ -25,6 +25,10 @@ export const ordersStore = {
 	},
 	assignGuest: async (id: string, staffGuestId: string) => {
 		await api.orders.assignGuest(id, staffGuestId);
+		await ordersStore.load();
+	},
+	unassign: async (id: string) => {
+		await api.orders.unassign(id);
 		await ordersStore.load();
 	},
 	updateStatus: async (id: string, status: OrderStatus) => {

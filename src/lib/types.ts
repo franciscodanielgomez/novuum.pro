@@ -96,6 +96,8 @@ export type OrderDraft = {
 
 export type Order = {
 	id: string;
+	/** Número secuencial de pedido (1, 2, 3...) para listados e impresión */
+	orderNumber: number;
 	createdAt: string;
 	hour: string;
 	customerId: string;
@@ -110,6 +112,8 @@ export type Order = {
 	changeDue?: number;
 	notes?: string;
 	total: number;
+	/** Usuario (team_members) que tomó el pedido */
+	createdByUserId?: string;
 	cashierNameSnapshot?: string;
 	shiftId?: string;
 	items: OrderItem[];

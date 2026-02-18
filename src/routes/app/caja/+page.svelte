@@ -110,7 +110,7 @@
 					<tbody>
 						{#each shiftOrders as order}
 							<tr class="border-t border-slate-100">
-								<td class="px-3 py-2">{order.id}</td>
+								<td class="px-3 py-2">#{order.orderNumber}</td>
 								<td class="px-3 py-2">{order.status}</td>
 								<td class="px-3 py-2">{order.paymentMethod}</td>
 								<td class="px-3 py-2">{formatMoney(order.total)}</td>

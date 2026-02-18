@@ -12,6 +12,7 @@
 	let exists = false;
 	let total = 0;
 	let orderId = '';
+	let orderNumber: number | undefined = undefined;
 
 	onMount(() => {
 		void (async () => {
@@ -20,6 +21,7 @@
 			const order = $ordersStore.find((o) => o.id === orderId);
 			if (!order) return;
 			exists = true;
+			orderNumber = order.orderNumber;
 			notes = order.notes ?? '';
 			paymentMethod = order.paymentMethod;
 			cashReceived = order.cashReceived ?? order.total;
@@ -40,7 +42,7 @@
 </script>
 
 <section class="panel max-w-xl p-4">
-	<h1 class="text-lg font-semibold">Editar pedido</h1>
+	<h1 class="text-lg font-semibold">Editar pedido {#if orderNumber}#{orderNumber}{/if}</h1>
 	{#if !exists}
 		<p class="mt-3 text-sm text-slate-500">Pedido no encontrado</p>
 	{:else}

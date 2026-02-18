@@ -1,8 +1,10 @@
 import type { Order, OrderItem, OrderStatus } from '$lib/types';
+import { APP_TIMEZONE } from '$lib/utils';
 import { supabase } from '$lib/supabase/client';
 
 type OrderRow = {
 	id: string;
+	order_number: number;
 	customer_id: string | null;
 	customer_phone_snapshot: string;
 	address_snapshot: string;
@@ -15,12 +17,14 @@ type OrderRow = {
 	change_due: number | null;
 	notes: string | null;
 	total: number;
+	created_by_user_id: string | null;
+	cashier_name_snapshot: string | null;
 	created_at: string;
 	updated_at: string;
 };
 
 const ORDER_COLUMNS =
-	'id, customer_id, customer_phone_snapshot, address_snapshot, between_streets_snapshot, status, assigned_staff_id, assigned_staff_guest_id, payment_method, cash_received, change_due, notes, total, created_at, updated_at';
+	'id, order_number, customer_id, customer_phone_snapshot, address_snapshot, between_streets_snapshot, status, assigned_staff_id, assigned_staff_guest_id, payment_method, cash_received, change_due, notes, total, created_by_user_id, cashier_name_snapshot, created_at, updated_at';
 
 type OrderItemRow = {
 	id: string;
@@ -34,12 +38,18 @@ type OrderItemRow = {
 };
 
 function formatHour(iso: string): string {
-	return new Date(iso).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false });
+	return new Date(iso).toLocaleTimeString('es-AR', {
+		timeZone: APP_TIMEZONE,
+		hour: '2-digit',
+		minute: '2-digit',
+		hour12: false
+	});
 }
 
 function rowToOrder(row: OrderRow, items: OrderItem[]): Order {
 	return {
 		id: row.id,
+		orderNumber: row.order_number,
 		createdAt: row.created_at,
 		hour: formatHour(row.created_at),
 		customerId: row.customer_id ?? '',
@@ -54,6 +64,8 @@ function rowToOrder(row: OrderRow, items: OrderItem[]): Order {
 		changeDue: row.change_due ?? undefined,
 		notes: row.notes ?? undefined,
 		total: Number(row.total),
+		createdByUserId: row.created_by_user_id ?? undefined,
+		cashierNameSnapshot: row.cashier_name_snapshot ?? undefined,
 		items
 	};
 }
@@ -115,7 +127,7 @@ export const ordersRepo = {
 		return rowToOrder(data as OrderRow, itemsMap.get(id) ?? []);
 	},
 
-	async create(payload: Omit<Order, 'id' | 'createdAt' | 'hour'>): Promise<Order> {
+	async create(payload: Omit<Order, 'id' | 'orderNumber' | 'createdAt' | 'hour'>): Promise<Order> {
 		const { data: orderData, error: orderError } = await supabase
 			.from('orders')
 			.insert({
@@ -130,7 +142,9 @@ export const ordersRepo = {
 				cash_received: payload.cashReceived ?? null,
 				change_due: payload.changeDue ?? null,
 				notes: payload.notes?.trim() || null,
-				total: payload.total ?? 0
+				total: payload.total ?? 0,
+				created_by_user_id: payload.createdByUserId || null,
+				cashier_name_snapshot: payload.cashierNameSnapshot?.trim() || null
 			})
 			.select(ORDER_COLUMNS)
 			.single();
@@ -170,6 +184,8 @@ export const ordersRepo = {
 		if (payload.changeDue !== undefined) updates.change_due = payload.changeDue ?? null;
 		if (payload.notes !== undefined) updates.notes = payload.notes?.trim() || null;
 		if (payload.total !== undefined) updates.total = payload.total;
+		if (payload.createdByUserId !== undefined) updates.created_by_user_id = payload.createdByUserId || null;
+		if (payload.cashierNameSnapshot !== undefined) updates.cashier_name_snapshot = payload.cashierNameSnapshot?.trim() || null;
 
 		if (Object.keys(updates).length > 0) {
 			const { error } = await supabase.from('orders').update(updates).eq('id', id);
@@ -221,12 +237,22 @@ export const ordersRepo = {
 		return this.get(id);
 	},
 
-	/** Elimina un pedido. Solo se puede eliminar si status es CANCELADO. */
+	/** Quita la asignación del pedido y lo deja en NO_ASIGNADO. */
+	async unassign(id: string): Promise<Order | null> {
+		const { error } = await supabase
+			.from('orders')
+			.update({ assigned_staff_id: null, assigned_staff_guest_id: null, status: 'NO_ASIGNADO' })
+			.eq('id', id);
+		if (error) throw error;
+		return this.get(id);
+	},
+
+	/** Elimina un pedido. Solo se puede eliminar si status es BORRADOR o CANCELADO. */
 	async delete(id: string): Promise<void> {
 		const order = await this.get(id);
 		if (!order) return;
-		if (order.status !== 'CANCELADO') {
-			throw new Error('Solo se puede eliminar un pedido cancelado');
+		if (order.status !== 'BORRADOR' && order.status !== 'CANCELADO') {
+			throw new Error('Solo se pueden eliminar pedidos en borrador o cancelados');
 		}
 		const { error: delItems } = await supabase.from('order_items').delete().eq('order_id', id);
 		if (delItems) throw delItems;

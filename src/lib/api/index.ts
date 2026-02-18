@@ -14,11 +14,12 @@ export const api = {
 	orders: {
 		list: () => ordersRepo.list(),
 		get: (id: string) => ordersRepo.get(id),
-		create: (payload: Omit<Order, 'id' | 'createdAt' | 'hour'>) => ordersRepo.create(payload),
+		create: (payload: Omit<Order, 'id' | 'orderNumber' | 'createdAt' | 'hour'>) => ordersRepo.create(payload),
 		update: (id: string, payload: Partial<Order>) => ordersRepo.update(id, payload),
 		updateStatus: (id: string, status: OrderStatus) => ordersRepo.updateStatus(id, status),
 		assign: (id: string, staffId: string) => ordersRepo.assign(id, staffId),
 		assignGuest: (id: string, staffGuestId: string) => ordersRepo.assignGuest(id, staffGuestId),
+		unassign: (id: string) => ordersRepo.unassign(id),
 		delete: (id: string) => ordersRepo.delete(id)
 	},
 	shifts: {

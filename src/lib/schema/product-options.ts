@@ -27,6 +27,7 @@ export type ProductOption = {
 	price_delta: number;
 	active: boolean;
 	sort_order: number;
+	image_url?: string | null;
 	created_at: string;
 	updated_at: string;
 };
