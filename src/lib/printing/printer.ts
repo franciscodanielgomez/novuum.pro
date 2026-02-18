@@ -11,8 +11,8 @@ const PRINTER_STORAGE_KEY = 'novum_printer_name';
 /** True si la app corre dentro de Tauri (desktop). Solo comprueba en browser. */
 export function isTauri(): boolean {
 	if (!browser || typeof window === 'undefined') return false;
-	const t = (window as unknown as { __TAURI__?: { core?: unknown } }).__TAURI__;
-	return !!t?.core;
+	const w = window as unknown as { __TAURI__?: { core?: unknown }; __TAURI_INTERNALS__?: unknown };
+	return !!(w.__TAURI__?.core ?? w.__TAURI_INTERNALS__);
 }
 
 /** Invoke de Tauri vía dynamic import (solo se carga en contexto Tauri, no en web). */
