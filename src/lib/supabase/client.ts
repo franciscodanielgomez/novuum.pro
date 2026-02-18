@@ -1,4 +1,4 @@
-import { PUBLIC_SUPABASE_ANON_KEY, PUBLIC_SUPABASE_URL } from '$env/static/public';
+import { env } from '$env/dynamic/public';
 import { createClient } from '@supabase/supabase-js';
 
 const UPLOAD_TIMEOUT_MS = 120_000;
@@ -30,7 +30,10 @@ const fetchWithLongTimeout: typeof fetch = (input, init) => {
 	});
 };
 
-export const supabase = createClient(PUBLIC_SUPABASE_URL, PUBLIC_SUPABASE_ANON_KEY, {
+const supabaseUrl = env.PUBLIC_SUPABASE_URL ?? '';
+const supabaseAnonKey = env.PUBLIC_SUPABASE_ANON_KEY ?? '';
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 	auth: {
 		persistSession: true,
 		autoRefreshToken: true,
