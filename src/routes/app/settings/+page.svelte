@@ -26,6 +26,7 @@
 	// Impresión (Tauri + fallback web)
 	let printers = $state<string[]>([]);
 	let selectedPrinter = $state<string>('');
+	let savedPrinterDisplay = $state<string>('');
 	let detectingPrinters = $state(false);
 	let printingTest = $state(false);
 
@@ -70,6 +71,7 @@
 	function savePrinterChoice() {
 		if (selectedPrinter) {
 			setSavedPrinterName(selectedPrinter);
+			savedPrinterDisplay = selectedPrinter;
 			toastsStore.success('Impresora guardada');
 		}
 	}
@@ -78,7 +80,7 @@
 		printingTest = true;
 		try {
 			await printTicket(demoTicketText(), selectedPrinter || undefined);
-			if (isTauri()) toastsStore.success('Enviado a imprimir');
+			if (isTauri()) toastsStore.success('Ticket enviado a impresora');
 			else toastsStore.success('Se abrió la vista de impresión');
 		} catch (e) {
 			toastsStore.error(e instanceof Error ? e.message : 'Error al imprimir');
@@ -156,7 +158,9 @@
 		await businessStore.load();
 		shippingPriceInput = String($businessStore.shippingPrice);
 		await loadPaymentMethods();
-		selectedPrinter = getSavedPrinterName() ?? '';
+		const saved = getSavedPrinterName() ?? '';
+		selectedPrinter = saved;
+		savedPrinterDisplay = saved;
 		loading = false;
 	});
 </script>
@@ -185,6 +189,11 @@
 						Versión web: al imprimir se abre una pestaña y el diálogo del navegador (fallback).
 					{/if}
 				</p>
+				{#if isTauri() && savedPrinterDisplay}
+					<p class="mt-1 text-xs text-slate-600 dark:text-slate-300">
+						Impresora actual: <strong>{savedPrinterDisplay}</strong>
+					</p>
+				{/if}
 				<div class="mt-3 flex flex-wrap items-end gap-2">
 					{#if isTauri()}
 						<button
@@ -211,7 +220,7 @@
 							</select>
 						</label>
 						<button type="button" class="btn-secondary" onclick={savePrinterChoice}>
-							Guardar selección
+							Guardar impresora
 						</button>
 					{/if}
 					<button

@@ -55,6 +55,21 @@ export const formatDateTime = (iso: string) => {
 	return `${day}/${month}/${year} - ${hour}:${minute}`;
 };
 
+/** Fecha en Argentina como dd/MM/yyyy */
+export const formatDateDDMMYYYY = (iso: string): string => {
+	const d = new Date(iso);
+	const parts = new Intl.DateTimeFormat('es-AR', {
+		timeZone: APP_TIMEZONE,
+		day: '2-digit',
+		month: '2-digit',
+		year: 'numeric'
+	}).formatToParts(d);
+	const day = parts.find((p) => p.type === 'day')!.value;
+	const month = parts.find((p) => p.type === 'month')!.value;
+	const year = parts.find((p) => p.type === 'year')!.value;
+	return `${day}/${month}/${year}`;
+};
+
 /** Número de pedido con ceros a la izquierda (ej. 5 → "000005") para búsqueda y visualización */
 const ORDER_NUMBER_PAD = 6;
 export const formatOrderNumber = (n: number) => String(n).padStart(ORDER_NUMBER_PAD, '0');

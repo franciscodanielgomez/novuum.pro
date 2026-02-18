@@ -88,6 +88,8 @@
 		groups: [] as ProductGroupAssignment[]
 	});
 	let productImageUploading = $state(false);
+	let showImageUrlInput = $state(false);
+	let imageUrlInputValue = $state('');
 	let categoriesList = $state<CategoryOption[]>([]);
 	let productGroupsList = $state<ProductGroupOption[]>([]);
 	let groupForm = $state({ name: '', min_select: 0, max_select: 1, sort_order: 0 });
@@ -291,6 +293,7 @@
 	const openNewProduct = () => {
 		targetProductId = null;
 		editingProductId = null;
+		showImageUrlInput = false;
 		productForm = { name: '', base_price: 0, active: true, image_url: '', category_ids: [], groups: [] };
 		detailDrawerOpen = true;
 	};
@@ -577,6 +580,7 @@
 
 	$effect(() => {
 		if (selectedProduct && detailDrawerOpen) {
+			showImageUrlInput = false;
 			const categoryIds = 'product_categories' in selectedProduct ? getProductCategoryIds(selectedProduct as SupabaseProduct) : [];
 			const imageUrl = (selectedProduct as SupabaseProduct).image_url?.trim() ?? '';
 			productForm = {
@@ -901,6 +905,46 @@
 										<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
 										Actualizar foto
 									</label>
+									<button
+										type="button"
+										class="text-xs text-slate-500 hover:text-slate-700 dark:text-neutral-400 dark:hover:text-neutral-300"
+										onclick={() => {
+											showImageUrlInput = !showImageUrlInput;
+											if (showImageUrlInput) imageUrlInputValue = productForm.image_url ?? '';
+										}}
+									>
+										O usar URL
+									</button>
+									{#if showImageUrlInput}
+										<div class="flex w-full max-w-xs items-center gap-1">
+											<input
+												type="url"
+												class="input flex-1 py-1.5 text-xs"
+												placeholder="https://..."
+												bind:value={imageUrlInputValue}
+												onkeydown={(e) => {
+												if (e.key === 'Enter') {
+													productForm = { ...productForm, image_url: imageUrlInputValue.trim() };
+													showImageUrlInput = false;
+												}
+											}}
+												onblur={() => {
+													const url = imageUrlInputValue.trim();
+													if (url) productForm = { ...productForm, image_url: url };
+												}}
+											/>
+											<button
+												type="button"
+												class="btn-secondary py-1.5 text-xs"
+												onclick={() => {
+													productForm = { ...productForm, image_url: imageUrlInputValue.trim() };
+													showImageUrlInput = false;
+												}}
+											>
+												OK
+											</button>
+										</div>
+									{/if}
 								</div>
 							{:else}
 								<label
@@ -914,6 +958,46 @@
 										<span>Subir imagen</span>
 									{/if}
 								</label>
+								<button
+									type="button"
+									class="text-xs text-slate-500 hover:text-slate-700 dark:text-neutral-400 dark:hover:text-neutral-300"
+									onclick={() => {
+										showImageUrlInput = !showImageUrlInput;
+										if (showImageUrlInput) imageUrlInputValue = productForm.image_url ?? '';
+									}}
+								>
+									O usar URL
+								</button>
+								{#if showImageUrlInput}
+									<div class="flex w-full max-w-xs items-center gap-1">
+										<input
+											type="url"
+											class="input flex-1 py-1.5 text-xs"
+											placeholder="https://..."
+											bind:value={imageUrlInputValue}
+											onkeydown={(e) => {
+												if (e.key === 'Enter') {
+													productForm = { ...productForm, image_url: imageUrlInputValue.trim() };
+													showImageUrlInput = false;
+												}
+											}}
+											onblur={() => {
+												const url = imageUrlInputValue.trim();
+												if (url) productForm = { ...productForm, image_url: url };
+											}}
+										/>
+										<button
+											type="button"
+											class="btn-secondary py-1.5 text-xs"
+											onclick={() => {
+												productForm = { ...productForm, image_url: imageUrlInputValue.trim() };
+												showImageUrlInput = false;
+											}}
+										>
+											OK
+										</button>
+									</div>
+								{/if}
 							{/if}
 						</div>
 					</div>

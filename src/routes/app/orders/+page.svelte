@@ -13,6 +13,9 @@
 	import { toastsStore } from '$lib/stores/toasts';
 	import type { Order, OrderStatus } from '$lib/types';
 	import { formatMoney, formatDateTime, formatOrderNumber, sameDate, todayYmd, dateInArgentinaYmd } from '$lib/utils';
+	import { isTauri, printTicket } from '$lib/printing/printer';
+	import { orderToTicketText } from '$lib/printing/ticket-layout';
+	import { downloadOrderTicketPdf } from '$lib/printing/ticket-pdf';
 	import { onMount } from 'svelte';
 	import { browser } from '$app/environment';
 
@@ -456,7 +459,20 @@
 		toastsStore.success('Pedido actualizado');
 	};
 
-	const printOrder = (order: Order) => {
+	async function printOrder(order: Order) {
+		if (isTauri()) {
+			try {
+				const cadeteName = getCadeteName(order);
+				const textOriginal = orderToTicketText(order, cadeteName, 'original');
+				const textCopia = orderToTicketText(order, cadeteName, 'copia');
+				await printTicket(textOriginal);
+				await printTicket(textCopia);
+				toastsStore.success('Ticket enviado a impresora');
+			} catch (e) {
+				toastsStore.error(e instanceof Error ? e.message : 'Error al imprimir');
+			}
+			return;
+		}
 		const subtotal = order.items.reduce((acc, i) => acc + i.subtotal, 0);
 		const envio = order.total > subtotal ? order.total - subtotal : 0;
 		const html = `
@@ -489,7 +505,7 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 			w.focus();
 			w.onload = () => w.print();
 		}
-	};
+	}
 
 	onMount(async () => {
 		try {
@@ -1082,6 +1098,22 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 													<path stroke-linecap="round" stroke-linejoin="round" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
 												</svg>
 												Imprimir
+											</button>
+										{/if}
+										{#if order.status !== 'BORRADOR'}
+											<button
+												type="button"
+												class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-neutral-700"
+												role="menuitem"
+												onclick={() => {
+													downloadOrderTicketPdf(order, getCadeteName(order));
+													orderMenuOpenId = null;
+												}}
+											>
+												<svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+													<path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+												</svg>
+												Descargar PDF
 											</button>
 										{/if}
 										{#if order.status === 'BORRADOR'}

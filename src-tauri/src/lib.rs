@@ -23,6 +23,7 @@ fn list_printers_windows() -> Result<Vec<String>, String> {
         .lines()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
+        .filter(|s| !s.eq_ignore_ascii_case("Microsoft Print to PDF"))
         .collect();
     Ok(list)
 }
@@ -86,12 +87,16 @@ fn print_ticket_windows(_text: &str, _printer_name: Option<&str>) -> Result<(), 
 #[tauri::command]
 fn print_ticket(payload: PrintTicketPayload) -> Result<(), String> {
     let printer_name = payload.printer_name.filter(|s| !s.is_empty());
+    if printer_name.is_none() {
+        return Err("No printer configured".to_string());
+    }
     print_ticket_windows(payload.text.as_str(), printer_name.as_deref())
 }
 
 #[derive(serde::Deserialize)]
 struct PrintTicketPayload {
     text: String,
+    #[serde(rename = "printerName")]
     printer_name: Option<String>,
 }
 

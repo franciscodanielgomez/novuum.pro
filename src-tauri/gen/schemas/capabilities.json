@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Capability for the main window","remote":{"urls":["https://novuum.pro","https://novuum.pro/*","https://*.supabase.co","https://*.supabase.co/*"]},"local":true,"windows":["main"],"permissions":["core:default","shell:allow-open","updater:default"]}}
