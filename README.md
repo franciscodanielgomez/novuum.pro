@@ -1,4 +1,4 @@
-# Grido Ituzaingo Delivery - MVP v0
+# Novuum - v1
 
 Frontend MVP (desktop-first, responsive) para reemplazar el sistema legacy de delivery.
 
