@@ -54,15 +54,33 @@
 		return (parts[0][0] + parts[1][0]).toUpperCase();
 	};
 
-	const items = [
-		{ href: '/app/orders', label: 'Pedidos', icon: 'pedidos' },
-		{ href: '/app/clients', label: 'Clientes', icon: 'clientes' },
-		{ href: '/app/team', label: 'Equipo', icon: 'equipo' },
-		{ href: '/app/products', label: 'Productos', icon: 'productos' },
-		{ href: '/app/categories', label: 'Categorías', icon: 'categories' },
-		{ href: '/app/groups', label: 'Grupos', icon: 'groups' },
-		{ href: '/app/business', label: 'Negocio', icon: 'negocio' }
+	const navGroups = [
+		{
+			title: 'Ventas',
+			items: [
+				{ href: '/app/orders', label: 'Pedidos', icon: 'pedidos' },
+				{ href: '/app/clients', label: 'Clientes', icon: 'clientes' }
+			]
+		},
+		{
+			title: 'Catálogo',
+			items: [
+				{ href: '/app/products', label: 'Productos', icon: 'productos' },
+				{ href: '/app/categories', label: 'Categorías', icon: 'categories' },
+				{ href: '/app/groups', label: 'Grupos', icon: 'groups' }
+			]
+		},
+		{
+			title: 'Administración',
+			items: [
+				{ href: '/app/business', label: 'Negocio', icon: 'negocio' },
+				{ href: '/app/team', label: 'Equipo', icon: 'equipo' },
+				{ href: '/app/settings', label: 'Configuraciones', icon: 'config' }
+			]
+		}
 	];
+	// Lista plana para cuando el menú está colapsado (solo iconos)
+	const items = navGroups.flatMap((g) => g.items);
 
 	onMount(() => {
 		void (async () => {
@@ -219,16 +237,15 @@
 		</div>
 
 		<nav class="space-y-1 py-1">
-			{#each items as item}
-				<a
-					class="flex items-center rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-neutral-200 dark:hover:bg-neutral-900"
-					class:justify-center={sidebarCollapsed}
-					class:gap-3={!sidebarCollapsed}
-					href={item.href}
-					title={item.label}
-				>
-					<span class="inline-flex h-5 w-5 items-center justify-center text-slate-500 dark:text-neutral-300">
-						{#if item.icon === 'pedidos'}
+			{#if sidebarCollapsed}
+				{#each items as item}
+					<a
+						class="flex items-center justify-center rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-neutral-200 dark:hover:bg-neutral-900"
+						href={item.href}
+						title={item.label}
+					>
+						<span class="inline-flex h-5 w-5 items-center justify-center text-slate-500 dark:text-neutral-300">
+							{#if item.icon === 'pedidos'}
 							<svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8">
 								<path d="M7 4h10l3 4v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8l2-4z" />
 								<path d="M3 8h18" />
@@ -281,11 +298,80 @@
 							</svg>
 						{/if}
 					</span>
-					{#if !sidebarCollapsed}
-						<span>{item.label}</span>
-					{/if}
 				</a>
 			{/each}
+			{:else}
+				{#each navGroups as group}
+					<div class="space-y-1">
+						<p class="px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-neutral-500">
+							{group.title}
+						</p>
+						{#each group.items as item}
+							<a
+								class="flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-neutral-200 dark:hover:bg-neutral-900"
+								href={item.href}
+								title={item.label}
+							>
+								<span class="inline-flex h-5 w-5 items-center justify-center text-slate-500 dark:text-neutral-300">
+									{#if item.icon === 'pedidos'}
+							<svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8">
+								<path d="M7 4h10l3 4v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8l2-4z" />
+								<path d="M3 8h18" />
+							</svg>
+						{:else if item.icon === 'clientes'}
+							<svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8">
+								<circle cx="9" cy="8" r="3" />
+								<path d="M3 19a6 6 0 0 1 12 0" />
+								<path d="M17 11h4M19 9v4" />
+							</svg>
+						{:else if item.icon === 'equipo'}
+							<svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8">
+								<circle cx="8" cy="8" r="3" />
+								<circle cx="17" cy="9" r="2.5" />
+								<path d="M2.5 19a5.5 5.5 0 0 1 11 0" />
+								<path d="M14.5 19a4.5 4.5 0 0 1 7 0" />
+							</svg>
+						{:else if item.icon === 'productos'}
+							<svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8">
+								<rect x="4" y="4" width="16" height="16" rx="2" />
+								<path d="M4 10h16M10 4v16" />
+							</svg>
+						{:else if item.icon === 'categories'}
+							<svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8">
+								<path d="M4 6h16M4 12h16M4 18h16" stroke-linecap="round" />
+							</svg>
+						{:else if item.icon === 'groups'}
+							<svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8">
+								<path d="M4 5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5zM14 5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1V5zM4 15a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-4zM14 15a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1v-4z" />
+							</svg>
+						{:else if item.icon === 'config'}
+							<svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8">
+								<circle cx="12" cy="12" r="3" />
+								<path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55h.04a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z" />
+							</svg>
+						{:else if item.icon === 'caja'}
+							<svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8">
+								<rect x="3" y="5" width="18" height="14" rx="2" />
+								<path d="M3 10h18M8 15h2" />
+							</svg>
+						{:else if item.icon === 'negocio'}
+							<svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8">
+								<path d="M3 10l2-5h14l2 5" />
+								<path d="M4 10v9h16v-9" />
+								<path d="M9 19v-5h6v5" />
+							</svg>
+						{:else}
+							<svg viewBox="0 0 24 24" class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8">
+								<path d="M4 18V6M10 18V10M16 18V13M22 18V3" />
+							</svg>
+						{/if}
+								</span>
+								<span>{item.label}</span>
+							</a>
+						{/each}
+					</div>
+				{/each}
+			{/if}
 		</nav>
 
 		<div class="relative mt-auto border-t border-slate-200 pt-4 pb-1 dark:border-neutral-800">

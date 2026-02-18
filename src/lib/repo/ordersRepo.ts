@@ -16,6 +16,7 @@ type OrderRow = {
 	cash_received: number | null;
 	change_due: number | null;
 	notes: string | null;
+	delivery_cost: number | null;
 	total: number;
 	created_by_user_id: string | null;
 	cashier_name_snapshot: string | null;
@@ -24,7 +25,7 @@ type OrderRow = {
 };
 
 const ORDER_COLUMNS =
-	'id, order_number, customer_id, customer_phone_snapshot, address_snapshot, between_streets_snapshot, status, assigned_staff_id, assigned_staff_guest_id, payment_method, cash_received, change_due, notes, total, created_by_user_id, cashier_name_snapshot, created_at, updated_at';
+	'id, order_number, customer_id, customer_phone_snapshot, address_snapshot, between_streets_snapshot, status, assigned_staff_id, assigned_staff_guest_id, payment_method, cash_received, change_due, notes, delivery_cost, total, created_by_user_id, cashier_name_snapshot, created_at, updated_at';
 
 type OrderItemRow = {
 	id: string;
@@ -63,6 +64,7 @@ function rowToOrder(row: OrderRow, items: OrderItem[]): Order {
 		cashReceived: row.cash_received ?? undefined,
 		changeDue: row.change_due ?? undefined,
 		notes: row.notes ?? undefined,
+		deliveryCost: row.delivery_cost != null ? Number(row.delivery_cost) : undefined,
 		total: Number(row.total),
 		createdByUserId: row.created_by_user_id ?? undefined,
 		cashierNameSnapshot: row.cashier_name_snapshot ?? undefined,
@@ -142,6 +144,7 @@ export const ordersRepo = {
 				cash_received: payload.cashReceived ?? null,
 				change_due: payload.changeDue ?? null,
 				notes: payload.notes?.trim() || null,
+				delivery_cost: payload.deliveryCost ?? 0,
 				total: payload.total ?? 0,
 				created_by_user_id: payload.createdByUserId || null,
 				cashier_name_snapshot: payload.cashierNameSnapshot?.trim() || null
@@ -183,6 +186,7 @@ export const ordersRepo = {
 		if (payload.cashReceived !== undefined) updates.cash_received = payload.cashReceived ?? null;
 		if (payload.changeDue !== undefined) updates.change_due = payload.changeDue ?? null;
 		if (payload.notes !== undefined) updates.notes = payload.notes?.trim() || null;
+		if (payload.deliveryCost !== undefined) updates.delivery_cost = payload.deliveryCost ?? 0;
 		if (payload.total !== undefined) updates.total = payload.total;
 		if (payload.createdByUserId !== undefined) updates.created_by_user_id = payload.createdByUserId || null;
 		if (payload.cashierNameSnapshot !== undefined) updates.cashier_name_snapshot = payload.cashierNameSnapshot?.trim() || null;

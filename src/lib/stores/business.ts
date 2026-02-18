@@ -6,6 +6,8 @@ type BusinessSettings = {
 	companyName: string;
 	branchName: string;
 	logoUrl: string | null;
+	shippingPrice: number;
+	phone: string | null;
 };
 
 type BusinessState = {
@@ -13,13 +15,17 @@ type BusinessState = {
 	companyName: string;
 	branchName: string;
 	logoUrl: string | null;
+	shippingPrice: number;
+	phone: string | null;
 	loading: boolean;
 };
 
 const DEFAULT_SETTINGS: BusinessSettings = {
 	companyName: 'Grido',
 	branchName: 'Ituzaingó',
-	logoUrl: null
+	logoUrl: null,
+	shippingPrice: 0,
+	phone: null
 };
 
 const state = writable<BusinessState>({
@@ -27,6 +33,8 @@ const state = writable<BusinessState>({
 	companyName: DEFAULT_SETTINGS.companyName,
 	branchName: DEFAULT_SETTINGS.branchName,
 	logoUrl: DEFAULT_SETTINGS.logoUrl,
+	shippingPrice: DEFAULT_SETTINGS.shippingPrice,
+	phone: DEFAULT_SETTINGS.phone,
 	loading: false
 });
 
@@ -43,7 +51,9 @@ const readFallback = (): BusinessSettings => {
 		return {
 			companyName: parsed.companyName?.trim() || DEFAULT_SETTINGS.companyName,
 			branchName: parsed.branchName?.trim() || DEFAULT_SETTINGS.branchName,
-			logoUrl: parsed.logoUrl?.trim() || null
+			logoUrl: parsed.logoUrl?.trim() || null,
+			shippingPrice: typeof parsed.shippingPrice === 'number' ? parsed.shippingPrice : DEFAULT_SETTINGS.shippingPrice,
+			phone: typeof parsed.phone === 'string' ? (parsed.phone.trim() || null) : DEFAULT_SETTINGS.phone
 		};
 	} catch {
 		return DEFAULT_SETTINGS;
@@ -62,7 +72,7 @@ export const businessStore = {
 		try {
 			const { data, error } = await supabase
 				.from('business_settings')
-				.select('id, company_name, branch_name, logo_url')
+				.select('id, company_name, branch_name, logo_url, shipping_price, phone')
 				.order('created_at', { ascending: true })
 				.limit(1)
 				.maybeSingle();
@@ -71,7 +81,9 @@ export const businessStore = {
 				const next: BusinessSettings = {
 					companyName: data.company_name?.trim() || DEFAULT_SETTINGS.companyName,
 					branchName: data.branch_name?.trim() || DEFAULT_SETTINGS.branchName,
-					logoUrl: data.logo_url?.trim() || null
+					logoUrl: data.logo_url?.trim() || null,
+					shippingPrice: typeof data.shipping_price === 'number' ? Number(data.shipping_price) : DEFAULT_SETTINGS.shippingPrice,
+					phone: data.phone?.trim() || null
 				};
 				writeFallback(next);
 				state.set({ id: data.id, ...next, loading: false });
@@ -86,18 +98,22 @@ export const businessStore = {
 		const companyName = settings.companyName.trim();
 		const branchName = settings.branchName.trim();
 		const logoUrl = settings.logoUrl?.trim() || null;
+		const shippingPrice = typeof settings.shippingPrice === 'number' ? settings.shippingPrice : 0;
+		const phone = settings.phone?.trim() || null;
 		if (!companyName || !branchName) return false;
 		const current = get(state);
 		const payload = {
 			company_name: companyName,
 			branch_name: branchName,
-			logo_url: logoUrl
+			logo_url: logoUrl,
+			shipping_price: shippingPrice,
+			phone
 		};
 
 		if (current.id) {
 			const { error } = await supabase.from('business_settings').update(payload).eq('id', current.id);
 			if (!error) {
-				const next = { companyName, branchName, logoUrl };
+				const next = { companyName, branchName, logoUrl, shippingPrice, phone };
 				writeFallback(next);
 				state.update((s) => ({ ...s, ...next }));
 				return true;
@@ -107,24 +123,42 @@ export const businessStore = {
 		const { data, error } = await supabase
 			.from('business_settings')
 			.insert(payload)
-			.select('id, company_name, branch_name, logo_url')
+			.select('id, company_name, branch_name, logo_url, shipping_price, phone')
 			.single();
 
 		if (!error && data) {
 			const next: BusinessSettings = {
 				companyName: data.company_name?.trim() || companyName,
 				branchName: data.branch_name?.trim() || branchName,
-				logoUrl: data.logo_url?.trim() || logoUrl
+				logoUrl: data.logo_url?.trim() || logoUrl,
+				shippingPrice: typeof data.shipping_price === 'number' ? Number(data.shipping_price) : shippingPrice,
+				phone: data.phone?.trim() || null
 			};
 			writeFallback(next);
 			state.set({ id: data.id, ...next, loading: false });
 			return true;
 		}
 
-		const fallbackNext = { companyName, branchName, logoUrl };
+		const fallbackNext = { companyName, branchName, logoUrl, shippingPrice, phone };
 		writeFallback(fallbackNext);
 		state.update((s) => ({ ...s, ...fallbackNext }));
 		return true;
+	},
+	updateShippingPrice: async (value: number) => {
+		const current = get(state);
+		if (!current.id) return false;
+		const num = Number(value);
+		if (Number.isNaN(num) || num < 0) return false;
+		const { error } = await supabase
+			.from('business_settings')
+			.update({ shipping_price: num })
+			.eq('id', current.id);
+		if (!error) {
+			state.update((s) => ({ ...s, shippingPrice: num }));
+			writeFallback({ ...readFallback(), shippingPrice: num });
+			return true;
+		}
+		return false;
 	},
 	uploadLogo: async (file: File, currentLogoUrl?: string | null) => {
 		if (!file) return { ok: false as const, message: 'Archivo inválido' };
@@ -173,7 +207,9 @@ export const businessStore = {
 		return businessStore.updateSettings({
 			companyName: current.companyName,
 			branchName: name,
-			logoUrl: current.logoUrl
+			logoUrl: current.logoUrl,
+			shippingPrice: current.shippingPrice,
+			phone: current.phone
 		});
 	}
 };

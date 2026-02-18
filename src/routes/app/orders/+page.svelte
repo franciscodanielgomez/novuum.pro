@@ -1324,12 +1324,33 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 				</div>
 				<div class="flex justify-between gap-2">
 					<dt class="text-slate-600 dark:text-slate-400">Envío</dt>
-					<dd>{selectedOrder.total > orderSubtotal ? formatMoney(selectedOrder.total - orderSubtotal) : '—'}</dd>
+					<dd>{selectedOrder.deliveryCost != null && selectedOrder.deliveryCost > 0
+						? formatMoney(selectedOrder.deliveryCost)
+						: selectedOrder.total > orderSubtotal
+							? formatMoney(selectedOrder.total - orderSubtotal)
+							: '—'}</dd>
 				</div>
 				<div class="flex justify-between gap-2 border-t border-slate-200 pt-2 font-semibold dark:border-slate-700">
 					<dt>Total</dt>
 					<dd>{formatMoney(selectedOrder.total)}</dd>
 				</div>
+			</dl>
+
+			<dl class="space-y-2 border-t border-slate-200 pt-3 dark:border-slate-700">
+				<div>
+					<dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Método de pago</dt>
+					<dd>{selectedOrder.paymentMethod ?? '—'}</dd>
+				</div>
+				{#if selectedOrder.paymentMethod && (selectedOrder.paymentMethod.toUpperCase() === 'EFECTIVO' || selectedOrder.paymentMethod === 'CASH')}
+					<div>
+						<dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Monto pagado</dt>
+						<dd>{selectedOrder.cashReceived != null ? formatMoney(selectedOrder.cashReceived) : '—'}</dd>
+					</div>
+					<div>
+						<dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Vuelto</dt>
+						<dd>{selectedOrder.changeDue != null ? formatMoney(selectedOrder.changeDue) : '—'}</dd>
+					</div>
+				{/if}
 			</dl>
 
 			<dl class="space-y-2 border-t border-slate-200 pt-3 dark:border-slate-700">

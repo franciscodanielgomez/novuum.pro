@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Dialog } from 'bits-ui';
+	import { Dialog, DropdownMenu } from 'bits-ui';
 	import {
 		computeOrderItemPrice,
 		validateSelections,
@@ -8,6 +8,7 @@
 	} from '$lib/schema/product-options';
 	import { customerSchema } from '$lib/schemas';
 	import { supabase } from '$lib/supabase/client';
+	import { businessStore } from '$lib/stores/business';
 	import { catalogStore } from '$lib/stores/catalog';
 	import { customersStore } from '$lib/stores/customers';
 	import { ordersStore } from '$lib/stores/orders';
@@ -81,6 +82,15 @@
 	let deleteDraftConfirmId = $state<string | null>(null);
 	const productsOptionsState = fromZustand(productsStore);
 
+	/** Métodos de pago desde la BD (Configuraciones); para selector y solo Efectivo muestra Paga con / Vuelto */
+	type PaymentMethodRow = { id: string; name: string; sort_order: number; active: boolean };
+	let paymentMethods = $state<PaymentMethodRow[]>([]);
+
+	function isCashPayment(method: string | undefined): boolean {
+		if (!method) return false;
+		return method.toUpperCase() === 'EFECTIVO' || method === 'CASH';
+	}
+
 	// Catálogo desde Supabase (categorías + productos) para filtrar por categoría, no por grupo
 	type SupabaseCategory = { id: string; name: string; sort_order: number };
 	type SupabaseProductRow = {
@@ -101,6 +111,22 @@
 		if (!catRes.error && catRes.data) supabaseCategories = catRes.data as SupabaseCategory[];
 		if (!prodRes.error && prodRes.data) supabaseProductsRaw = prodRes.data as SupabaseProductRow[];
 	};
+
+	async function loadPaymentMethods() {
+		const { data, error } = await supabase
+			.from('payment_methods')
+			.select('id, name, sort_order, active')
+			.eq('active', true)
+			.order('sort_order', { ascending: true });
+		if (!error && data) {
+			paymentMethods = data.map((r) => ({
+				id: r.id,
+				name: r.name,
+				sort_order: r.sort_order ?? 0,
+				active: r.active ?? true
+			}));
+		}
+	}
 	const useSupabaseCatalog = $derived(supabaseCategories.length > 0 && supabaseProductsRaw.length > 0);
 	const supabaseProductsAsCatalog = $derived(
 		supabaseProductsRaw.map((p) => ({
@@ -127,7 +153,7 @@
 		selectedCustomerId: null,
 		categoryId: 'all',
 		cart: [],
-		paymentMethod: 'CASH',
+		paymentMethod: paymentMethods[0]?.name ?? 'Efectivo',
 		cashReceived: 0,
 		deliveryCost: 0,
 		notes: '',
@@ -136,15 +162,20 @@
 
 	/** Convierte un pedido BORRADOR del repo en draft para las cards del POS */
 	function orderToDraft(order: Order, index: number): OrderDraft {
+		const itemsSubtotal = (order.items ?? []).reduce((acc, item) => acc + item.subtotal, 0);
+		const deliveryCost =
+			order.deliveryCost != null && order.deliveryCost >= 0
+				? order.deliveryCost
+				: Math.max(0, (order.total ?? 0) - itemsSubtotal);
 		return {
 			id: order.id,
 			title: `Pedido ${index + 1}`,
-			selectedCustomerId: order.customerId,
+			selectedCustomerId: order.customerId || null,
 			categoryId: 'all',
 			cart: order.items ?? [],
-			paymentMethod: order.paymentMethod,
+			paymentMethod: order.paymentMethod ?? 'Efectivo',
 			cashReceived: order.cashReceived ?? 0,
-			deliveryCost: 0,
+			deliveryCost,
 			notes: order.notes ?? '',
 			createdAt: order.createdAt,
 			customerPhoneSnapshot: order.customerPhoneSnapshot,
@@ -221,7 +252,7 @@
 	const deliveryCost = $derived(activeDraft?.deliveryCost ?? 0);
 	const total = $derived(subtotal + deliveryCost);
 	const changeDue = $derived(
-		activeDraft && activeDraft.paymentMethod === 'CASH' ? Math.max(0, activeDraft.cashReceived - total) : 0
+		activeDraft && isCashPayment(activeDraft.paymentMethod) ? Math.max(0, activeDraft.cashReceived - total) : 0
 	);
 
 	const draftCustomer = (draft: OrderDraft) =>
@@ -324,7 +355,7 @@
 					addressSnapshot: customer.address,
 					betweenStreetsSnapshot: customer.betweenStreets,
 					status: 'BORRADOR',
-					paymentMethod: 'CASH',
+					paymentMethod: newDraft.paymentMethod,
 					total: 0,
 					items: [],
 					createdByUserId: $sessionStore.user?.id,
@@ -650,7 +681,7 @@
 
 	const canConfirm = () => {
 		if (!activeDraft || !selectedCustomer || activeDraft.cart.length === 0) return false;
-		if (activeDraft.paymentMethod === 'CASH') {
+		if (isCashPayment(activeDraft.paymentMethod)) {
 			return (activeDraft.cashReceived ?? 0) >= total;
 		}
 		return true;
@@ -661,42 +692,48 @@
 			toastsStore.error('Seleccioná cliente y al menos un item');
 			return;
 		}
-		await shiftsStore.loadOpen();
-		const payload = {
-			customerId: selectedCustomer!.id,
-			customerPhoneSnapshot: selectedCustomer!.phone,
-			addressSnapshot: selectedCustomer!.address,
-			betweenStreetsSnapshot: selectedCustomer!.betweenStreets,
-			status: 'NO_ASIGNADO' as const,
-			paymentMethod: activeDraft.paymentMethod,
-			cashReceived: activeDraft.paymentMethod === 'CASH' ? activeDraft.cashReceived : undefined,
-			changeDue: activeDraft.paymentMethod === 'CASH' ? changeDue : undefined,
-			notes: activeDraft.notes,
-			total,
-			createdByUserId: $sessionStore.user?.id,
-			cashierNameSnapshot: $sessionStore.user?.name,
-			shiftId: $sessionStore.shift?.id,
-			items: activeDraft.cart
-		};
-		if (activeDraft.orderId) {
-			await ordersStore.update(activeDraft.orderId, payload);
-			toastsStore.success('Pedido confirmado');
-		} else {
-			const created = await ordersStore.create(payload);
-			toastsStore.success(`Pedido #${created.orderNumber} creado`);
+		try {
+			await shiftsStore.loadOpen();
+			const payload = {
+				customerId: selectedCustomer!.id,
+				customerPhoneSnapshot: selectedCustomer!.phone,
+				addressSnapshot: selectedCustomer!.address,
+				betweenStreetsSnapshot: selectedCustomer!.betweenStreets,
+				status: 'NO_ASIGNADO' as const,
+				paymentMethod: activeDraft.paymentMethod,
+				cashReceived: isCashPayment(activeDraft.paymentMethod) ? activeDraft.cashReceived : undefined,
+				changeDue: isCashPayment(activeDraft.paymentMethod) ? changeDue : undefined,
+				notes: activeDraft.notes,
+				deliveryCost: activeDraft.deliveryCost ?? 0,
+				total,
+				createdByUserId: $sessionStore.user?.id,
+				cashierNameSnapshot: $sessionStore.user?.name,
+				shiftId: $sessionStore.shift?.id,
+				items: activeDraft.cart
+			};
+			if (activeDraft.orderId) {
+				await ordersStore.update(activeDraft.orderId, payload);
+				toastsStore.success('Pedido confirmado');
+			} else {
+				const created = await ordersStore.create(payload);
+				toastsStore.success(`Pedido #${created.orderNumber} creado`);
+			}
+			const confirmedId = activeDraftId;
+			const currentIndex = draftsStore.current.findIndex((d) => d.id === confirmedId);
+			draftsStore.update((prev) => prev.filter((d) => d.id !== confirmedId));
+			const remaining = draftsStore.current;
+			if (remaining.length > 0) {
+				const nextIndex = Math.min(currentIndex, remaining.length - 1);
+				activeDraftId = remaining[nextIndex].id;
+			} else {
+				activeDraftId = '';
+			}
+			draftsList = draftsStore.current.slice();
+			await ordersStore.load();
+		} catch (err) {
+			const message = err instanceof Error ? err.message : 'No se pudo confirmar el pedido';
+			toastsStore.error(message);
 		}
-		const confirmedId = activeDraftId;
-		const currentIndex = draftsStore.current.findIndex((d) => d.id === confirmedId);
-		draftsStore.update((prev) => prev.filter((d) => d.id !== confirmedId));
-		const remaining = draftsStore.current;
-		if (remaining.length > 0) {
-			const nextIndex = Math.min(currentIndex, remaining.length - 1);
-			activeDraftId = remaining[nextIndex].id;
-		} else {
-			activeDraftId = '';
-		}
-		draftsList = draftsStore.current.slice();
-		await ordersStore.load();
 	};
 
 	const onKeyDown = (e: KeyboardEvent) => {
@@ -731,25 +768,30 @@
 		void ordersStore.update(d.orderId, {
 			items: d.cart,
 			total: totalD,
+			deliveryCost: d.deliveryCost ?? 0,
 			paymentMethod: d.paymentMethod,
 			notes: d.notes,
-			cashReceived: d.paymentMethod === 'CASH' ? d.cashReceived : undefined
+			cashReceived: isCashPayment(d.paymentMethod) ? d.cashReceived : undefined
 		});
 	});
 
-	// Cerrar menú de tres puntos al hacer clic fuera
+	// Cerrar menú de tres puntos al hacer clic fuera (no en el trigger ni en el contenido del menú)
 	$effect(() => {
 		const openId = draftMenuOpenId;
 		if (!openId) return;
-		const close = () => {
+		const handler = (e: MouseEvent) => {
+			const target = e.target instanceof Element ? e.target : null;
+			if (!target) return;
+			if (target.closest('[data-draft-menu-trigger]')) return;
+			if (target.closest('[data-draft-menu-content]')) return;
 			draftMenuOpenId = null;
 		};
 		const t = setTimeout(() => {
-			document.addEventListener('click', close, { once: true });
+			document.addEventListener('pointerdown', handler);
 		}, 0);
 		return () => {
 			clearTimeout(t);
-			document.removeEventListener('click', close);
+			document.removeEventListener('pointerdown', handler);
 		};
 	});
 
@@ -778,8 +820,15 @@
 		const draftIdFromUrl = $page.url.searchParams.get('draftId');
 		const openClientModalFromUrl = $page.url.searchParams.get('openClientModal') === '1';
 		void (async () => {
-			await Promise.all([customersStore.load(), catalogStore.load(), shiftsStore.loadOpen(), ordersStore.load()]);
+			await Promise.all([
+				customersStore.load(),
+				catalogStore.load(),
+				shiftsStore.loadOpen(),
+				ordersStore.load(),
+				businessStore.load()
+			]);
 			await loadSupabaseCatalog();
+			await loadPaymentMethods();
 			// Si no hay drafts (p. ej. entró directo al POS), cargar pedidos BORRADOR del repo como cards
 			if (draftsStore.current.length === 0 && !customerIdFromUrl) {
 				const allOrders = await api.orders.list();
@@ -799,6 +848,7 @@
 					const newDraft = createDraft(draftCount);
 					const withClient = {
 						...newDraft,
+						paymentMethod: paymentMethods[0]?.name ?? 'Efectivo',
 						selectedCustomerId: customer.id,
 						customerPhoneSnapshot: customer.phone,
 						addressSnapshot: customer.address,
@@ -811,7 +861,7 @@
 							addressSnapshot: customer.address,
 							betweenStreetsSnapshot: customer.betweenStreets,
 							status: 'BORRADOR',
-							paymentMethod: 'CASH',
+							paymentMethod: paymentMethods[0]?.name ?? 'Efectivo',
 							total: 0,
 							items: [],
 							createdByUserId: $sessionStore.user?.id,
@@ -831,7 +881,21 @@
 				const match = current.find(
 					(d) => d.id === draftIdFromUrl || d.orderId === draftIdFromUrl
 				);
-				if (match) activeDraftId = match.id;
+				if (match) {
+					activeDraftId = match.id;
+					draftsList = draftsStore.current.slice();
+				} else {
+					// Cargar el pedido desde la API (ej. llegó por "Continuar" desde lista de pedidos)
+					const order = await api.orders.get(draftIdFromUrl);
+					if (order && order.status === 'BORRADOR') {
+						const draft = orderToDraft(order, current.length);
+						draftsStore.update((prev) => [...prev, draft]);
+						draftsList = draftsStore.current.slice();
+						activeDraftId = draft.id;
+					} else {
+						toastsStore.error('Pedido no encontrado o no es un borrador');
+					}
+				}
 				await goto('/app/create_order', { replaceState: true });
 			} else if (openClientModalFromUrl) {
 				openClientModal(false);
@@ -879,52 +943,54 @@
 								? 'border-neutral-800 bg-neutral-900 text-white dark:border-slate-400 dark:bg-slate-100 dark:text-slate-900'
 								: 'border-slate-200 dark:border-neutral-600'}"
 						>
-							<button
-								type="button"
-								class="absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-lg transition-colors {isActive
-									? 'text-slate-300 hover:bg-white/20 hover:text-white dark:text-slate-600 dark:hover:bg-slate-800/30 dark:hover:text-slate-900'
-									: 'text-slate-400 hover:bg-slate-200/80 hover:text-slate-600 dark:hover:bg-neutral-700 dark:hover:text-neutral-200'}"
-								aria-label="Opciones del pedido"
-								title="Opciones"
-								onclick={(e) => {
-									e.stopPropagation();
-									draftMenuOpenId = draftMenuOpenId === draft.id ? null : draft.id;
+							<DropdownMenu.Root
+								open={draftMenuOpenId === draft.id}
+								onOpenChange={(open) => {
+									draftMenuOpenId = open ? draft.id : null;
 								}}
 							>
-								<svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-									<circle cx="12" cy="6" r="1.5" />
-									<circle cx="12" cy="12" r="1.5" />
-									<circle cx="12" cy="18" r="1.5" />
-								</svg>
-							</button>
-							{#if draftMenuOpenId === draft.id}
-								<div
-									class="absolute right-1 bottom-full z-30 mb-1 min-w-[120px] rounded-lg border border-slate-200 bg-white py-1.5 shadow-lg dark:border-neutral-700 dark:bg-neutral-800"
-									role="menu"
+								<DropdownMenu.Trigger
+									data-draft-menu-trigger
+									class="absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-lg transition-colors {isActive
+										? 'text-slate-300 hover:bg-white/20 hover:text-white dark:text-slate-600 dark:hover:bg-slate-800/30 dark:hover:text-slate-900'
+										: 'text-slate-400 hover:bg-slate-200/80 hover:text-slate-600 dark:hover:bg-neutral-700 dark:hover:text-neutral-200'}"
+									aria-label="Opciones del pedido"
+									title="Opciones"
+									onclick={(e) => e.stopPropagation()}
 								>
-									<button
-										type="button"
-										class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-rose-600 hover:bg-slate-100 dark:hover:bg-neutral-700 dark:text-rose-400"
-										role="menuitem"
-										onclick={(e) => {
-											e.stopPropagation();
-											draftMenuOpenId = null;
-											deleteDraftConfirmId = draft.id;
-										}}
+									<svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+										<circle cx="12" cy="6" r="1.5" />
+										<circle cx="12" cy="12" r="1.5" />
+										<circle cx="12" cy="18" r="1.5" />
+									</svg>
+								</DropdownMenu.Trigger>
+								<DropdownMenu.Portal>
+									<DropdownMenu.Content
+										side="left"
+										align="start"
+										sideOffset={4}
+										interactOutsideBehavior="ignore"
+										data-draft-menu-content
+										class="min-w-[120px] rounded-lg border border-slate-200 bg-white py-1.5 shadow-lg dark:border-neutral-700 dark:bg-neutral-800"
 									>
-										<svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-											<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-											<path d="M10 11v6M14 11v6" />
-										</svg>
-										Eliminar
-									</button>
-								</div>
-							{/if}
+										<DropdownMenu.Item
+											class="flex cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm text-rose-600 outline-none hover:bg-slate-100 dark:hover:bg-neutral-700 dark:text-rose-400"
+											onSelect={() => {
+												deleteDraftConfirmId = draft.id;
+											}}
+										>
+											<svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+												<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+												<path d="M10 11v6M14 11v6" />
+											</svg>
+											Eliminar
+										</DropdownMenu.Item>
+									</DropdownMenu.Content>
+								</DropdownMenu.Portal>
+							</DropdownMenu.Root>
 							<button
 								type="button"
-								class="flex min-w-0 flex-1 flex-col gap-0.5 text-left {isActive
-									? 'hover:bg-white/5 dark:hover:bg-slate-800/30'
-									: 'hover:bg-slate-50 dark:hover:bg-neutral-800/50'}"
+								class="flex min-w-0 flex-1 flex-col gap-0.5 text-left"
 								onclick={() => {
 									draftMenuOpenId = null;
 									activeDraftId = draft.id;
@@ -936,9 +1002,8 @@
 										{draftCustomer(draft)?.address ?? 'Sin dirección'}
 									</p>
 								</div>
-								<div class="mt-0.5 flex w-full items-center justify-between gap-2">
-									<span class="text-xs {isActive ? 'text-slate-400 dark:text-slate-500' : 'text-slate-500 dark:text-slate-400'}">#{index + 1}</span>
-									<span class="ml-auto shrink-0 rounded-full px-2 py-0.5 text-xs font-medium {isActive
+								<div class="mt-0.5 flex w-full items-center justify-end">
+									<span class="shrink-0 rounded-full px-2 py-0.5 text-xs font-medium {isActive
 										? 'bg-white/20 text-white dark:bg-slate-800/40 dark:text-slate-900'
 										: 'bg-violet-100 text-violet-800 dark:bg-violet-900/50 dark:text-violet-200'}">
 										Borrador
@@ -1215,11 +1280,14 @@
 						<button
 							type="button"
 							class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-slate-50 text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
-							title="Agregar envío $ 500"
+							title={$businessStore.shippingPrice > 0
+								? `Agregar envío ${formatMoney($businessStore.shippingPrice)}`
+								: 'Sin costo de envío configurado'}
 							onclick={() => {
+								const price = $businessStore.shippingPrice ?? 0;
 								updateActiveDraft((draft) => ({
 									...draft,
-									deliveryCost: draft.deliveryCost === 500 ? 0 : 500
+									deliveryCost: draft.deliveryCost === price ? 0 : price
 								}));
 							}}
 						>
@@ -1237,9 +1305,27 @@
 			</div>
 
 			<div class="mt-4 space-y-3 border-t border-slate-200 pt-3 dark:border-slate-700">
-				{#if activeDraft?.paymentMethod === 'CASH'}
+				<label class="block space-y-1">
+					<span class="text-sm font-medium">Paga con</span>
+					<select
+						class="input w-full"
+						value={activeDraft?.paymentMethod ?? paymentMethods[0]?.name ?? ''}
+						onchange={(e) => {
+							const value = (e.currentTarget as HTMLSelectElement).value;
+							updateActiveDraft((draft) => ({ ...draft, paymentMethod: value }));
+						}}
+					>
+						{#each paymentMethods as pm}
+							<option value={pm.name}>{pm.name}</option>
+						{/each}
+						{#if paymentMethods.length === 0}
+							<option value="Efectivo">Efectivo</option>
+						{/if}
+					</select>
+				</label>
+				{#if activeDraft && isCashPayment(activeDraft.paymentMethod)}
 					<label class="block space-y-1">
-						<span class="text-sm font-medium">Paga con</span>
+						<span class="text-sm font-medium">Monto recibido</span>
 						<input
 							class="input"
 							type="number"

@@ -1,6 +1,7 @@
 export type StaffRole = 'CAJERO' | 'CADETE' | 'ADMINISTRADOR' | 'GESTOR';
 export type OrderStatus = 'BORRADOR' | 'NO_ASIGNADO' | 'ASIGNADO' | 'COMPLETADO' | 'CANCELADO';
-export type PaymentMethod = 'CASH' | 'MP' | 'TRANSFER';
+/** Nombre del método de pago (p. ej. desde payment_methods: 'Efectivo', 'Mercadopago') */
+export type PaymentMethod = string;
 export type ShiftTurn = 'MAÑANA' | 'TARDE' | 'NOCHE';
 
 export type Customer = {
@@ -111,6 +112,8 @@ export type Order = {
 	cashReceived?: number;
 	changeDue?: number;
 	notes?: string;
+	/** Costo de envío del pedido */
+	deliveryCost?: number;
 	total: number;
 	/** Usuario (team_members) que tomó el pedido */
 	createdByUserId?: string;
