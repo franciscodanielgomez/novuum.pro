@@ -20,10 +20,15 @@ jobs:
       - name: Verificar secreto de firma (TAURI_PRIVATE_KEY)
         run: |
           if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
-            Write-Error "Falta el secreto TAURI_PRIVATE_KEY. En el repo: Settings → Secrets and variables → Actions → New repository secret. Nombre: TAURI_PRIVATE_KEY. Valor: contenido de tu clave privada de Tauri (tauri signer generate)."
+            Write-Error "Falta el secreto TAURI_PRIVATE_KEY. En el repo: Settings → Secrets and variables → Actions → New repository secret. Nombre: TAURI_PRIVATE_KEY."
             exit 1
           }
-          echo "Secreto TAURI_PRIVATE_KEY configurado."
+          $key = $env:TAURI_SIGNING_PRIVATE_KEY.Trim()
+          if ($key.StartsWith("-") -or $key.StartsWith("untrusted")) {
+            Write-Error "TAURI_PRIVATE_KEY tiene formato incorrecto. Debe ser SOLO la linea base64 de la clave (empieza con RWS...). No incluir lineas 'untrusted comment' ni '-----BEGIN...'. Ejecuta 'tauri signer generate' y copia solo la segunda linea (la base64) al secreto."
+            exit 1
+          }
+          echo "Secreto TAURI_PRIVATE_KEY configurado (formato OK)."
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
 
