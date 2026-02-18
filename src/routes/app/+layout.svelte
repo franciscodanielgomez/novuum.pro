@@ -545,28 +545,28 @@
 					</a>
 				{/if}
 			{#if $page.url.pathname !== '/app/create_order'}
-					<a
-						class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-700 transition hover:bg-slate-50 dark:border-neutral-600 dark:bg-black dark:text-neutral-200 dark:hover:bg-neutral-900"
-						href="/app/create_order"
-						aria-label="POS - Crear pedido"
-						title="POS - Crear pedido"
-					>
-						<svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-							<path d="M3 10l2-5h14l2 5" />
-							<path d="M4 10v9h16v-9" />
-							<path d="M9 19v-5h6v5" />
-						</svg>
-					</a>
-					<a
-						class="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-slate-900 text-lg font-semibold text-white transition hover:bg-black dark:bg-white dark:text-black dark:hover:bg-neutral-200"
-						href="/app/create_order?openClientModal=1"
-						aria-label="Crear pedido"
-						title="Crear pedido"
-					>
-						<span aria-hidden="true">+</span>
-					</a>
-				</div>
+				<a
+					class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-700 transition hover:bg-slate-50 dark:border-neutral-600 dark:bg-black dark:text-neutral-200 dark:hover:bg-neutral-900"
+					href="/app/create_order"
+					aria-label="POS - Crear pedido"
+					title="POS - Crear pedido"
+				>
+					<svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+						<path d="M3 10l2-5h14l2 5" />
+						<path d="M4 10v9h16v-9" />
+						<path d="M9 19v-5h6v5" />
+					</svg>
+				</a>
+				<a
+					class="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-slate-900 text-lg font-semibold text-white transition hover:bg-black dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+					href="/app/create_order?openClientModal=1"
+					aria-label="Crear pedido"
+					title="Crear pedido"
+				>
+					<span aria-hidden="true">+</span>
+				</a>
 			{/if}
+			</div>
 		</header>
 
 		<main class="min-h-0 flex-1 overflow-y-auto p-4 md:p-6">{@render children()}</main>
