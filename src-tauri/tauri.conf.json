@@ -1,0 +1,57 @@
+{
+  "productName": "Novum",
+  "version": "0.1.0",
+  "identifier": "com.novum.pos",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run build:tauri",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Novum POS",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": ""
+    },
+    "longDescription": "POS Novum - Punto de venta",
+    "shortDescription": "POS Novum",
+    "category": "Business",
+    "msi": {
+      "wixLanguage": "es-AR"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "TODO_REEMPLAZAR_CON_PUBKEY_TRAS_tauri_signer_generate",
+      "endpoints": [
+        "https://github.com/TU_USUARIO/TU_REPO/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}

@@ -2,9 +2,12 @@
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import ToastHost from '$lib/components/ToastHost.svelte';
+	import { DESKTOP_DOWNLOAD_URL } from '$lib/desktop-download';
+	import { isTauri } from '$lib/printing/printer';
 	import { businessStore } from '$lib/stores/business';
 	import { sessionStore } from '$lib/stores/session';
 	import { themeStore } from '$lib/stores/theme';
+	import { updateStore } from '$lib/stores/updateStore';
 	import { onMount } from 'svelte';
 
 	let { children } = $props();
@@ -89,6 +92,9 @@
 				await goto('/login');
 			}
 		})();
+		if (isTauri()) {
+			updateStore.init();
+		}
 	});
 
 </script>
@@ -427,6 +433,56 @@
 					>
 						Mi perfil
 					</button>
+					{#if isTauri()}
+						<div class="border-t border-slate-200 px-3 py-2 dark:border-neutral-700">
+							<p class="text-xs font-medium text-slate-500 dark:text-neutral-400">
+								Versión {$updateStore.appVersion || '…'}
+							</p>
+							<p class="mt-0.5 text-xs text-slate-500 dark:text-neutral-500">
+								{#if $updateStore.status === 'checking'}
+									⏳ Buscando actualización...
+								{:else if $updateStore.status === 'update-available' && $updateStore.updateInfo}
+									⬇ Nueva versión {$updateStore.updateInfo.version} disponible
+								{:else if $updateStore.status === 'updated'}
+									✓ Actualizado
+								{:else if $updateStore.status === 'error'}
+									{$updateStore.errorMessage ?? 'Error'}
+								{:else}
+									—
+								{/if}
+							</p>
+							<div class="mt-2 flex flex-col gap-1">
+								<button
+									class="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 dark:border-neutral-600 dark:bg-black dark:text-neutral-200 dark:hover:bg-neutral-900"
+									disabled={$updateStore.status === 'checking'}
+									onclick={() => {
+										void updateStore.manualCheck();
+									}}
+								>
+									Buscar actualizaciones
+								</button>
+								{#if $updateStore.status === 'update-available'}
+									<button
+										class="rounded bg-emerald-600 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-700"
+										onclick={() => {
+											void updateStore.installUpdate();
+										}}
+									>
+										Descargar e instalar
+									</button>
+								{/if}
+							</div>
+						</div>
+					{:else}
+						<a
+							href={DESKTOP_DOWNLOAD_URL}
+							target="_blank"
+							rel="noopener noreferrer"
+							class="block rounded-md px-3 py-2 text-left text-sm text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/40"
+						>
+							Descargar versión Desktop
+						</a>
+					{/if}
 					<button
 						class="block w-full rounded-md px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 dark:text-neutral-200 dark:hover:bg-neutral-900"
 						onclick={toggleTheme}
@@ -467,8 +523,28 @@
 					<path d="M8 3.5V16.5" stroke="currentColor" stroke-width="1.5" />
 				</svg>
 			</button>
+			<div class="flex items-center gap-2">
+				{#if isTauri()}
+					<span
+						class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-400"
+						title="Versión de la app"
+					>
+						{#if $updateStore.status === 'update-available'}
+							<span class="h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden="true"></span>
+						{/if}
+						v{$updateStore.appVersion || '…'}
+					</span>
+				{:else}
+					<a
+						href={DESKTOP_DOWNLOAD_URL}
+						target="_blank"
+						rel="noopener noreferrer"
+						class="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300 dark:hover:bg-emerald-900/50"
+					>
+						Descargar Desktop
+					</a>
+				{/if}
 			{#if $page.url.pathname !== '/app/create_order'}
-				<div class="flex items-center gap-2">
 					<a
 						class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-700 transition hover:bg-slate-50 dark:border-neutral-600 dark:bg-black dark:text-neutral-200 dark:hover:bg-neutral-900"
 						href="/app/create_order"

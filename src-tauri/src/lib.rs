@@ -1,0 +1,151 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use std::io::Write;
+use tauri::AppHandle;
+use tauri_plugin_updater::UpdaterExt;
+
+#[cfg(windows)]
+fn list_printers_windows() -> Result<Vec<String>, String> {
+    let output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "Get-Printer | Select-Object -ExpandProperty Name",
+        ])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("PowerShell error: {}", stderr));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let list: Vec<String> = stdout
+        .lines()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    Ok(list)
+}
+
+#[cfg(not(windows))]
+fn list_printers_windows() -> Result<Vec<String>, String> {
+    Ok(vec![])
+}
+
+#[tauri::command]
+fn list_printers() -> Result<Vec<String>, String> {
+    #[cfg(windows)]
+    return list_printers_windows();
+    #[cfg(not(windows))]
+    return Ok(vec![]);
+}
+
+#[cfg(windows)]
+fn print_ticket_windows(text: &str, printer_name: Option<&str>) -> Result<(), String> {
+    let mut temp = std::env::temp_dir();
+    temp.push("novum_ticket_");
+    temp.set_extension("txt");
+    let path = temp.to_string_lossy();
+    let mut f = std::fs::File::create(&temp).map_err(|e| e.to_string())?;
+    f.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+    f.write_all(b"\n").map_err(|e| e.to_string())?;
+    drop(f);
+
+    let cmd = if let Some(name) = printer_name {
+        format!(
+            "Get-Content -Path '{}' -Raw | Out-Printer -Name '{}'",
+            path.replace('\'', "''"),
+            name.replace('\'', "''")
+        )
+    } else {
+        format!(
+            "Get-Content -Path '{}' -Raw | Out-Printer",
+            path.replace('\'', "''")
+        )
+    };
+
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", &cmd])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    let _ = std::fs::remove_file(&temp);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Error al imprimir: {}", stderr));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn print_ticket_windows(_text: &str, _printer_name: Option<&str>) -> Result<(), String> {
+    Err("Impresión solo soportada en Windows".to_string())
+}
+
+#[tauri::command]
+fn print_ticket(payload: PrintTicketPayload) -> Result<(), String> {
+    let printer_name = payload.printer_name.filter(|s| !s.is_empty());
+    print_ticket_windows(payload.text.as_str(), printer_name.as_deref())
+}
+
+#[derive(serde::Deserialize)]
+struct PrintTicketPayload {
+    text: String,
+    printer_name: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct UpdateInfo {
+    version: String,
+    date: Option<String>,
+    body: Option<String>,
+}
+
+#[tauri::command]
+fn get_app_version(app: AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+#[tauri::command]
+async fn check_update(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
+    let builder = app.updater_builder().map_err(|e| e.to_string())?;
+    let update = builder.build().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())?;
+    Ok(update.map(|u| UpdateInfo {
+        version: u.version,
+        date: u.date.map(|d| d.to_string()),
+        body: u.body,
+    }))
+}
+
+#[tauri::command]
+async fn download_and_install_update(app: AppHandle) -> Result<(), String> {
+    let builder = app.updater_builder().map_err(|e| e.to_string())?;
+    let upd = builder.build().map_err(|e| e.to_string())?;
+    let update = upd.check().await.map_err(|e| e.to_string())?;
+    let Some(update) = update else {
+        return Err("No hay actualización disponible".to_string());
+    };
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|e| e.to_string())?;
+    // En Windows el instalador cierra la app; en otros SO podrías llamar a relaunch desde el frontend si hace falta
+    Ok(())
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .invoke_handler(tauri::generate_handler![
+            list_printers,
+            print_ticket,
+            get_app_version,
+            check_update,
+            download_and_install_update,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
