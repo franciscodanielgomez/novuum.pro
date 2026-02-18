@@ -23,7 +23,10 @@
 			exists = true;
 			orderNumber = order.orderNumber;
 			notes = order.notes ?? '';
-			paymentMethod = order.paymentMethod;
+			paymentMethod =
+				(order.paymentMethod === 'MP' || order.paymentMethod === 'TRANSFER'
+					? order.paymentMethod
+					: 'CASH') as 'CASH' | 'MP' | 'TRANSFER';
 			cashReceived = order.cashReceived ?? order.total;
 			total = order.total;
 		})();

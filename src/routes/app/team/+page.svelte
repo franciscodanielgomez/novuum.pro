@@ -52,9 +52,9 @@
 	);
 	const canSave = $derived(canManage || isEditingSelf);
 	/** Al guardar, si es Gestor no se permite enviar rol Administrador. */
-	const rolesToSave = (roles: StaffRole[]) => {
+	const rolesToSave = (roles: StaffRole[]): StaffRole[] => {
 		const list = $sessionStore.user?.role === 'GESTOR' ? roles.filter((r) => r !== 'ADMINISTRADOR') : roles;
-		return list.length > 0 ? list : ['CAJERO'];
+		return list.length > 0 ? list : (['CAJERO'] as StaffRole[]);
 	};
 
 	const teamList = $derived.by((): TeamRow[] => {

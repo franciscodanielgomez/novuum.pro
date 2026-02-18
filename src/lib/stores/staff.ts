@@ -47,9 +47,10 @@ export const staffStore = {
 
 			if (!error && data) {
 				const mapped = data.map((row: { id: string; full_name: string | null; email: string | null; phone?: string | null; role: string | null; roles?: string[] | null; active: boolean | null }) => {
-					const rolesArr = Array.isArray(row.roles) && row.roles.length > 0
-						? (row.roles as Staff['roles'])
-						: [mapLegacyRole(row.role)];
+					const rolesArr: StaffRole[] =
+						Array.isArray(row.roles) && row.roles.length > 0
+							? (row.roles as StaffRole[])
+							: [mapLegacyRole(row.role)];
 					return {
 						id: row.id,
 						name: row.full_name ?? row.email ?? 'Usuario',

@@ -366,7 +366,7 @@
 		saveTableState('pedidos', {
 			globalFilter: query,
 			pagination: { pageIndex, pageSize },
-			sorting: { column: sortColumn, dir: sortDir },
+			sorting: sortColumn ? [{ id: sortColumn, desc: sortDir === 'desc' }] : undefined,
 			filters: {
 				status: statusFilter,
 				todayOnly,
@@ -529,10 +529,10 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 			}
 			if (saved?.columnVisibility && Object.keys(saved.columnVisibility).length)
 				columnVisibility = { ...columnVisibility, ...saved.columnVisibility };
-			const sort = (saved as { sorting?: { column?: SortColumn; dir?: 'asc' | 'desc' } })?.sorting;
-			if (sort?.column && ORDER_TABLE_COLUMNS.some((c) => c.id === sort.column)) {
-				sortColumn = sort.column;
-				if (sort.dir === 'asc' || sort.dir === 'desc') sortDir = sort.dir;
+			const sort = saved?.sorting;
+			if (Array.isArray(sort) && sort[0] && ORDER_TABLE_COLUMNS.some((c) => c.id === sort[0].id)) {
+				sortColumn = sort[0].id as SortColumn;
+				sortDir = sort[0].desc ? 'desc' : 'asc';
 			}
 		}
 	});

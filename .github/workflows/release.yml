@@ -5,7 +5,7 @@ name: Release Tauri (Windows MSI)
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v*'
 
 permissions:
   contents: write
@@ -16,6 +16,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Verificar secreto de firma (TAURI_PRIVATE_KEY)
+        run: |
+          if (-not $env:TAURI_SIGNING_PRIVATE_KEY) {
+            Write-Error "Falta el secreto TAURI_PRIVATE_KEY. En el repo: Settings → Secrets and variables → Actions → New repository secret. Nombre: TAURI_PRIVATE_KEY. Valor: contenido de tu clave privada de Tauri (tauri signer generate)."
+            exit 1
+          }
+          echo "Secreto TAURI_PRIVATE_KEY configurado."
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4

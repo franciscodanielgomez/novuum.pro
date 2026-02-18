@@ -215,10 +215,11 @@ Con una versión anterior instalada, abrí la app; en unos segundos debería apa
 
 ### Web – enlace a Desktop
 
-El botón "Descargar versión Desktop" / "Descargar Desktop" apunta por defecto a la **página** del último release:  
-`https://github.com/TU_USUARIO/TU_REPO/releases/latest`  
-(así el usuario ve los assets e instrucciones sin depender del nombre exacto del MSI).
+El enlace se **actualiza solo** si en `.env` definís el repo de GitHub:
 
-Para cambiarlo, definí en `.env`:  
-`VITE_DESKTOP_DOWNLOAD_URL=https://github.com/tu-org/tu-repo/releases/latest`  
-(o la URL directa del `.msi` si preferís enlace de descarga directa).
+- **`VITE_GITHUB_REPO=owner/repo`** (ej. `franciscodanielgomez/novuum.pro`): la app consulta la API de GitHub y usa el enlace directo al `.msi` de la última release. Así cada nueva versión publicada queda disponible sin tocar la config.
+
+Si no definís `VITE_GITHUB_REPO`, se usa el fallback:
+
+- **`VITE_DESKTOP_DOWNLOAD_URL`**: URL fija (p. ej. la página `https://github.com/owner/repo/releases/latest` o la URL directa de un `.msi`).
+- Si tampoco está definida, se usa `https://github.com/TU_USUARIO/TU_REPO/releases/latest`.

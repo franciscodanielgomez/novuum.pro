@@ -2,13 +2,13 @@
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import ToastHost from '$lib/components/ToastHost.svelte';
-	import { DESKTOP_DOWNLOAD_URL } from '$lib/desktop-download';
+	import { desktopDownloadStore } from '$lib/desktop-download';
 	import { isTauri } from '$lib/printing/printer';
 	import { businessStore } from '$lib/stores/business';
 	import { sessionStore } from '$lib/stores/session';
 	import { themeStore } from '$lib/stores/theme';
 	import { updateStore } from '$lib/stores/updateStore';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 
 	let { children } = $props();
 	let sidebarCollapsed = $state(false);
@@ -19,11 +19,15 @@
 
 	$effect(() => {
 		if (avatarMenuOpen && avatarButtonRef) {
-			const rect = avatarButtonRef.getBoundingClientRect();
-			avatarDropdownStyle = {
-				bottom: `${window.innerHeight - rect.top + 8}px`,
-				left: `${rect.left}px`
-			};
+			// Recalcular posición después de que el dropdown esté en el DOM
+			tick().then(() => {
+				if (!avatarButtonRef) return;
+				const rect = avatarButtonRef.getBoundingClientRect();
+				avatarDropdownStyle = {
+					bottom: `${window.innerHeight - rect.top + 8}px`,
+					left: `${rect.left}px`
+				};
+			});
 		}
 	});
 
@@ -94,7 +98,23 @@
 		})();
 		if (isTauri()) {
 			updateStore.init();
+		} else {
+			desktopDownloadStore.init();
 		}
+	});
+
+	// Cerrar menú avatar al hacer clic fuera (botón y dropdown tienen stopPropagation / están excluidos)
+	$effect(() => {
+		if (!avatarMenuOpen) return;
+		const handler = (e: MouseEvent) => {
+			const target = e.target as Node;
+			if (avatarButtonRef?.contains(target)) return;
+			const dropdown = document.querySelector('[data-avatar-dropdown]');
+			if (dropdown?.contains(target)) return;
+			avatarMenuOpen = false;
+		};
+		document.addEventListener('click', handler, true);
+		return () => document.removeEventListener('click', handler, true);
 	});
 
 </script>
@@ -382,6 +402,7 @@
 
 		<div class="relative mt-auto border-t border-slate-200 pt-4 pb-1 dark:border-neutral-800">
 			<button
+				type="button"
 				bind:this={avatarButtonRef}
 				class="flex items-center text-left hover:bg-slate-100 dark:hover:bg-neutral-900"
 				class:w-full={!sidebarCollapsed}
@@ -395,7 +416,13 @@
 				class:justify-center={sidebarCollapsed}
 				class:gap-3={!sidebarCollapsed}
 				title={$sessionStore.user?.name ?? 'Usuario'}
-				onclick={() => (avatarMenuOpen = !avatarMenuOpen)}
+				aria-haspopup="true"
+				aria-expanded={avatarMenuOpen}
+				onclick={(e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					avatarMenuOpen = !avatarMenuOpen;
+				}}
 			>
 				{#if $sessionStore.user?.avatarUrl}
 					<img
@@ -422,6 +449,7 @@
 
 			{#if avatarMenuOpen}
 				<div
+					data-avatar-dropdown
 					class="fixed z-50 w-56 rounded-lg border border-slate-200 bg-white p-1 shadow-lg dark:border-neutral-700 dark:bg-black"
 					style="bottom: {avatarDropdownStyle.bottom}; left: {avatarDropdownStyle.left};"
 				>
@@ -475,12 +503,12 @@
 						</div>
 					{:else}
 						<a
-							href={DESKTOP_DOWNLOAD_URL}
+							href={$desktopDownloadStore.url}
 							target="_blank"
 							rel="noopener noreferrer"
 							class="block rounded-md px-3 py-2 text-left text-sm text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/40"
 						>
-							Descargar versión Desktop
+							{$desktopDownloadStore.loading ? 'Cargando…' : 'Descargar versión Desktop'}
 						</a>
 					{/if}
 					<button
@@ -536,12 +564,12 @@
 					</span>
 				{:else}
 					<a
-						href={DESKTOP_DOWNLOAD_URL}
+						href={$desktopDownloadStore.url}
 						target="_blank"
 						rel="noopener noreferrer"
 						class="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300 dark:hover:bg-emerald-900/50"
 					>
-						Descargar Desktop
+						{$desktopDownloadStore.loading ? '…' : 'Descargar Desktop'}
 					</a>
 				{/if}
 			{#if $page.url.pathname !== '/app/create_order'}
