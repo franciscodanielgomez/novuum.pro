@@ -2,6 +2,14 @@
   "identifier": "default",
   "description": "Capability for the main window",
   "windows": ["main"],
+  "remote": {
+    "urls": [
+      "https://novuum.pro",
+      "https://novuum.pro/*",
+      "https://*.supabase.co",
+      "https://*.supabase.co/*"
+    ]
+  },
   "permissions": [
     "core:default",
     "shell:allow-open",

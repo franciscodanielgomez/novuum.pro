@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::io::Write;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_updater::UpdaterExt;
 
 #[cfg(windows)]
@@ -138,6 +138,20 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .setup(|app| {
+            // Ventana principal: en dev carga localhost, en producción carga https://novuum.pro
+            let url = if cfg!(debug_assertions) {
+                WebviewUrl::External("http://localhost:5173".parse().unwrap())
+            } else {
+                WebviewUrl::External("https://novuum.pro".parse().unwrap())
+            };
+            WebviewWindowBuilder::new(app, "main", url)
+                .title("Novuum POS")
+                .inner_size(1280.0, 800.0)
+                .min_inner_size(800.0, 600.0)
+                .build()?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             list_printers,
             print_ticket,
