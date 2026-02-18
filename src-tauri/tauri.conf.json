@@ -37,14 +37,16 @@
     "windows": {
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
-      "timestampUrl": ""
+      "timestampUrl": "",
+      "wix": {
+        "language": {
+          "es-AR": {}
+        }
+      }
     },
     "longDescription": "POS Novum - Punto de venta",
     "shortDescription": "POS Novum",
-    "category": "Business",
-    "msi": {
-      "wixLanguage": "es-AR"
-    }
+    "category": "Business"
   },
   "plugins": {
     "updater": {
