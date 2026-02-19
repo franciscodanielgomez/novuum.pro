@@ -18,6 +18,8 @@
 	import { toastsStore } from '$lib/stores/toasts';
 	import { fromZustand } from '$lib/stores/zustandBridge';
 	import { api } from '$lib/api';
+	import { printTicket } from '$lib/printing/printer';
+	import { orderToTicketText } from '$lib/printing/ticket-layout';
 	import type { Customer, Order, OrderDraft, OrderItem, PaymentMethod, Product, SKU } from '$lib/types';
 	import { generateId, formatMoney } from '$lib/utils';
 	import { page } from '$app/stores';
@@ -711,12 +713,27 @@
 				shiftId: $sessionStore.shift?.id,
 				items: activeDraft.cart
 			};
+			let orderToPrint: Order | null = null;
 			if (activeDraft.orderId) {
 				await ordersStore.update(activeDraft.orderId, payload);
 				toastsStore.success('Pedido confirmado');
+				orderToPrint = await api.orders.get(activeDraft.orderId);
 			} else {
 				const created = await ordersStore.create(payload);
 				toastsStore.success(`Pedido #${created.orderNumber} creado`);
+				orderToPrint = created;
+			}
+			if (orderToPrint) {
+				try {
+					const cadeteName = '-';
+					const textOriginal = orderToTicketText(orderToPrint, cadeteName, 'original');
+					const textCopia = orderToTicketText(orderToPrint, cadeteName, 'copia');
+					await printTicket(textOriginal);
+					await printTicket(textCopia);
+					toastsStore.success('Ticket enviado a impresora');
+				} catch (e) {
+					toastsStore.error(e instanceof Error ? e.message : 'Error al imprimir');
+				}
 			}
 			const confirmedId = activeDraftId;
 			const currentIndex = draftsStore.current.findIndex((d) => d.id === confirmedId);
