@@ -99,9 +99,7 @@ fn print_ticket_file_windows(_text: &str, _printer_name: Option<&str>) -> Result
 #[cfg(windows)]
 fn print_ticket_gdi_windows(text: &str, printer_name: &str) -> Result<(), String> {
     use std::iter;
-    use windows::core::PCWSTR;
-    use windows::Win32::Foundation::*;
-    use windows::Win32::Graphics::Gdi::*;
+    use winapi::um::wingdi::*;
 
     fn str_to_wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(iter::once(0)).collect()
@@ -118,12 +116,12 @@ fn print_ticket_gdi_windows(text: &str, printer_name: &str) -> Result<(), String
 
     unsafe {
         let hdc = CreateDCW(
-            PCWSTR::from_raw(driver.as_ptr()),
-            PCWSTR::from_raw(device.as_ptr()),
-            PCWSTR::null(),
-            None,
+            driver.as_ptr(),
+            device.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
         );
-        if hdc.is_invalid() {
+        if hdc.is_null() {
             return Err(format!(
                 "No se pudo abrir la impresora: {}",
                 std::io::Error::last_os_error()
@@ -132,9 +130,9 @@ fn print_ticket_gdi_windows(text: &str, printer_name: &str) -> Result<(), String
 
         let mut docinfo = DOCINFOW {
             cbSize: std::mem::size_of::<DOCINFOW>() as i32,
-            lpszDocName: PCWSTR::from_raw(doc_name.as_ptr()),
-            lpszOutput: PCWSTR::null(),
-            lpszDatatype: PCWSTR::null(),
+            lpszDocName: doc_name.as_ptr(),
+            lpszOutput: std::ptr::null::<u16>(),
+            lpszDatatype: std::ptr::null::<u16>(),
             fwType: 0,
         };
 
@@ -155,77 +153,54 @@ fn print_ticket_gdi_windows(text: &str, printer_name: &str) -> Result<(), String
             ));
         }
 
-        // Fuente fija para ticket (térmico)
+        let pitch_and_family = (FF_MODERN as u32) | (FIXED_PITCH as u32);
         let font = CreateFontW(
-            120,  // height (0.12" approx at 1000 logical units/inch for thermal)
+            120,
             0,
             0,
             0,
-            400,  // FW_NORMAL
+            400, // FW_NORMAL
             0,
             0,
             0,
-            DEFAULT_CHARSET.0,
-            OUT_DEFAULT_PRECIS.0,
-            CLIP_DEFAULT_PRECIS.0,
-            DEFAULT_QUALITY.0,
-            (FF_MODERN | FIXED_PITCH).0,
-            PCWSTR::from_raw(str_to_wide("Consolas").as_ptr()),
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            DEFAULT_QUALITY,
+            pitch_and_family,
+            str_to_wide("Consolas").as_ptr(),
         );
-        let old_font = if !font.is_invalid() {
-            SelectObject(hdc, font)
+        let old_font = if !font.is_null() {
+            SelectObject(hdc, font as *mut _)
         } else {
-            HGDIOBJ::default()
+            std::ptr::null_mut()
         };
 
-        SetBkMode(hdc, BKMODE_TRANSPARENT);
+        SetBkMode(hdc, TRANSPARENT);
 
-        let mut tm = TEXTMETRICW::default();
-        if GetTextMetrics(hdc, &mut tm).as_bool() {
-            let line_height = (tm.tmHeight + tm.tmExternalLeading) as i32;
-            let margin_x = 50;
-            let mut y = 100i32;
-
-            for line in lines {
-                let line_wide = str_to_wide(line);
-                if line_wide.len() > 1 {
-                    let len = (line_wide.len() - 1) as i32; // sin el null
-                    let _ = TextOutW(
-                        hdc,
-                        margin_x,
-                        y,
-                        PCWSTR::from_raw(line_wide.as_ptr()),
-                        len,
-                    );
-                }
-                y += line_height;
-            }
+        let mut tm: TEXTMETRICW = std::mem::zeroed();
+        let line_height = if GetTextMetricsW(hdc, &mut tm) != 0 {
+            (tm.tmHeight + tm.tmExternalLeading) as i32
         } else {
-            // Fallback sin métricas: dibujar con espaciado fijo
-            let line_height = 150i32;
-            let margin_x = 50;
-            let mut y = 100i32;
-            for line in lines {
-                let line_wide = str_to_wide(line);
-                if line_wide.len() > 1 {
-                    let len = (line_wide.len() - 1) as i32;
-                    let _ = TextOutW(
-                        hdc,
-                        margin_x,
-                        y,
-                        PCWSTR::from_raw(line_wide.as_ptr()),
-                        len,
-                    );
-                }
-                y += line_height;
+            150i32
+        };
+        let margin_x = 50i32;
+        let mut y = 100i32;
+
+        for line in lines {
+            let line_wide = str_to_wide(line);
+            if line_wide.len() > 1 {
+                let slice = &line_wide[..(line_wide.len() - 1)];
+                TextOutW(hdc, margin_x, y, slice.as_ptr(), slice.len() as i32);
             }
+            y += line_height;
         }
 
-        if !old_font.is_invalid() {
+        if !old_font.is_null() {
             let _ = SelectObject(hdc, old_font);
         }
-        if !font.is_invalid() {
-            let _ = DeleteObject(font);
+        if !font.is_null() {
+            let _ = DeleteObject(font as *mut _);
         }
 
         if EndPage(hdc) <= 0 {
