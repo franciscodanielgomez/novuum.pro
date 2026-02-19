@@ -99,8 +99,8 @@ export const sessionStore = {
 			// Sin conexión con la API
 		}
 		try {
-			const { data } = await supabase.auth.getUser();
-			user = data?.user ?? null;
+			const { data } = await supabase.auth.getSession();
+			user = data?.session?.user ?? null;
 		} catch {
 			// Supabase auth no disponible
 		}
@@ -127,9 +127,13 @@ export const sessionStore = {
 
 		if (listenerInitialized) return;
 		listenerInitialized = true;
-		supabase.auth.onAuthStateChange(async (_event, session) => {
+		supabase.auth.onAuthStateChange(async (event, session) => {
+			if (event === 'SIGNED_OUT' || !session) {
+				state.update((s) => ({ ...s, user: null, ready: true }));
+				return;
+			}
 			try {
-				const mapped = await mapUser(session?.user ?? null);
+				const mapped = await mapUser(session.user);
 				state.update((s) => ({
 					...s,
 					user: mapped,
@@ -138,7 +142,7 @@ export const sessionStore = {
 			} catch {
 				state.update((s) => ({
 					...s,
-					user: session?.user ? {
+					user: session.user ? {
 						id: session.user.id,
 						email: session.user.email ?? '',
 						name: ((session.user.user_metadata?.name as string)?.trim() || session.user.email) ?? 'Usuario',

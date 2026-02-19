@@ -10,6 +10,7 @@
 	import { themeStore } from '$lib/stores/theme';
 	import { updateStore } from '$lib/stores/updateStore';
 	import { onMount, tick } from 'svelte';
+	import { browser } from '$app/environment';
 
 	let { children } = $props();
 	let sidebarCollapsed = $state(false);
@@ -101,6 +102,18 @@
 			updateStore.init();
 		} else {
 			desktopDownloadStore.init();
+		}
+		// Revalidar sesión cada 45 min para evitar quedarse "colgado" cuando el token expira
+		const interval = setInterval(() => {
+			sessionStore.hydrate();
+		}, 45 * 60 * 1000);
+		return () => clearInterval(interval);
+	});
+
+	// Si la sesión se invalida (token expirado, cierre en otro tab), redirigir a login
+	$effect(() => {
+		if (browser && $sessionStore.ready && !$sessionStore.user) {
+			goto('/login');
 		}
 	});
 
