@@ -64,7 +64,7 @@ export async function printTicket(text: string, printerName?: string): Promise<v
 	if (invoke) {
 		const name = printerName ?? getSavedPrinterName() ?? undefined;
 		await invoke('print_ticket', {
-			payload: { text, printerName: name || null }
+			payload: { text, printerName: name || null, useCrlf: true }
 		});
 		return;
 	}

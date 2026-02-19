@@ -57,7 +57,6 @@ fn print_ticket_windows(text: &str, printer_name: Option<&str>) -> Result<(), St
     let path = temp.to_string_lossy();
     let mut f = std::fs::File::create(&temp).map_err(|e| e.to_string())?;
     f.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
-    f.write_all(b"\n").map_err(|e| e.to_string())?;
     drop(f);
 
     let cmd = if let Some(name) = printer_name {
@@ -99,7 +98,12 @@ fn print_ticket(payload: PrintTicketPayload) -> Result<(), String> {
     if printer_name.is_none() {
         return Err("No printer configured".to_string());
     }
-    print_ticket_windows(payload.text.as_str(), printer_name.as_deref())
+    let text_for_file = if payload.use_crlf == Some(true) {
+        format!("{}\r\n", payload.text.replace('\n', "\r\n"))
+    } else {
+        format!("{}\n", payload.text)
+    };
+    print_ticket_windows(&text_for_file, printer_name.as_deref())
 }
 
 #[derive(serde::Deserialize)]
@@ -107,6 +111,8 @@ struct PrintTicketPayload {
     text: String,
     #[serde(rename = "printerName")]
     printer_name: Option<String>,
+    #[serde(rename = "useCrlf")]
+    use_crlf: Option<bool>,
 }
 
 #[derive(serde::Serialize)]

@@ -61,6 +61,7 @@
 
 	// Estado de tabla con persistencia (solo aplicado en cliente en onMount).
 	let searchQuery = $state('');
+	let categoryFilterId = $state('');
 	let pageIndex = $state(0);
 	let pageSize = $state(20);
 	const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
@@ -147,11 +148,15 @@
 	const groups = $derived(targetProductId ? $productsState.getGroupsByProduct(targetProductId) : []);
 	const totalProducts = products.length;
 
-	// Búsqueda global por nombre, descripción y categoría(s).
+	// Búsqueda global por nombre, descripción y categoría(s); filtro por categoría.
 	const filteredProducts = $derived.by(() => {
+		let list = products;
+		if (categoryFilterId) {
+			list = list.filter((p) => getProductCategoryIds(p).includes(categoryFilterId));
+		}
 		const q = String(searchQuery).trim().toLowerCase();
-		if (!q) return products;
-		return products.filter((p) => {
+		if (!q) return list;
+		return list.filter((p) => {
 			const name = (p.name ?? '').toLowerCase();
 			const desc = (p.description ?? '').toLowerCase();
 			const cat = getProductCategoryNames(p).toLowerCase();
@@ -653,15 +658,15 @@
 				No hay productos. Creá uno con «+ Add New Product».
 			</p>
 		{:else}
-			<!-- Búsqueda global y botón Nuevo producto (alineado a la derecha, como en Clientes/Grupos). -->
+			<!-- Búsqueda, filtro por categoría y botón Nuevo producto -->
 			{#if browser}
 				<div class="mb-4 flex flex-wrap items-end gap-3">
-					<div>
+					<div class="min-w-0 flex-1">
 						<label for="products-search" class="block text-sm font-medium text-slate-700 dark:text-neutral-300">Buscar</label>
 						<input
 							id="products-search"
 							type="search"
-							class="input mt-1 max-w-md"
+							class="input mt-1 w-full min-w-[18rem]"
 							placeholder="Nombre, descripción o categoría…"
 							aria-label="Buscar productos"
 							value={searchQuery}
@@ -672,7 +677,26 @@
 							}}
 						/>
 					</div>
-					<div class="ml-auto shrink-0">
+					<div class="w-48 shrink-0">
+						<label for="products-category-filter" class="block text-sm font-medium text-slate-700 dark:text-neutral-300">Categoría</label>
+						<select
+							id="products-category-filter"
+							class="input mt-1 w-full"
+							aria-label="Filtrar por categoría"
+							value={categoryFilterId}
+							onchange={(e) => {
+								categoryFilterId = (e.currentTarget as HTMLSelectElement).value;
+								pageIndex = 0;
+								persistProductsTable();
+							}}
+						>
+							<option value="">Todas</option>
+							{#each categoriesList as cat}
+								<option value={cat.id}>{cat.name}</option>
+							{/each}
+						</select>
+					</div>
+					<div class="shrink-0">
 						<button type="button" class="btn-primary" onclick={openNewProduct}>+ Nuevo producto</button>
 					</div>
 				</div>
