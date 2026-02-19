@@ -176,7 +176,7 @@ fn print_ticket_gdi_windows(text: &str, printer_name: &str) -> Result<(), String
             std::ptr::null_mut()
         };
 
-        SetBkMode(hdc, TRANSPARENT);
+        SetBkMode(hdc, TRANSPARENT as i32);
 
         let mut tm: TEXTMETRICW = std::mem::zeroed();
         let line_height = if GetTextMetricsW(hdc, &mut tm) != 0 {
