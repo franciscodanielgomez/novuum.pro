@@ -155,7 +155,7 @@ fn print_ticket_gdi_windows(text: &str, printer_name: &str) -> Result<(), String
 
         let pitch_and_family = (FF_MODERN as u32) | (FIXED_PITCH as u32);
         let font = CreateFontW(
-            -22,
+            -30,
             0,
             0,
             0,
@@ -184,7 +184,7 @@ fn print_ticket_gdi_windows(text: &str, printer_name: &str) -> Result<(), String
         } else {
             150i32
         };
-        let margin_x = 50i32;
+        let margin_x = 20i32;
         let mut y = 100i32;
 
         for line in lines {
