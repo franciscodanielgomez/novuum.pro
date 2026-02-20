@@ -119,13 +119,18 @@
 			return;
 		}
 		savingShipping = true;
-		const ok = await businessStore.updateShippingPrice(num);
-		savingShipping = false;
-		if (ok) {
-			toastsStore.success('Precio de envío actualizado');
-			shippingPriceInput = String($businessStore.shippingPrice);
-		} else {
-			toastsStore.error('No se pudo guardar el precio de envío');
+		try {
+			const ok = await businessStore.updateShippingPrice(num);
+			if (ok) {
+				toastsStore.success('Precio de envío actualizado');
+				shippingPriceInput = String($businessStore.shippingPrice);
+			} else {
+				toastsStore.error('No se pudo guardar el precio de envío');
+			}
+		} catch (e) {
+			toastsStore.error(e instanceof Error ? e.message : 'No se pudo guardar. Comprobá la conexión.');
+		} finally {
+			savingShipping = false;
 		}
 	}
 
@@ -175,15 +180,20 @@
 			return;
 		}
 		savingTicketPrint = true;
-		const result = await businessStore.updateTicketPrintSettings(fontPt, marginL, marginR);
-		savingTicketPrint = false;
-		if (result.ok) {
-			toastsStore.success('Configuración de impresión del ticket guardada');
-			ticketFontSizeInput = String(fontPt);
-			ticketMarginLeftInput = String(marginL);
-			ticketMarginRightInput = String(marginR);
-		} else {
-			toastsStore.error(result.error);
+		try {
+			const result = await businessStore.updateTicketPrintSettings(fontPt, marginL, marginR);
+			if (result.ok) {
+				toastsStore.success('Configuración de impresión del ticket guardada');
+				ticketFontSizeInput = String(fontPt);
+				ticketMarginLeftInput = String(marginL);
+				ticketMarginRightInput = String(marginR);
+			} else {
+				toastsStore.error(result.error);
+			}
+		} catch (e) {
+			toastsStore.error(e instanceof Error ? e.message : 'No se pudo guardar. Comprobá la conexión.');
+		} finally {
+			savingTicketPrint = false;
 		}
 	}
 

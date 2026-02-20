@@ -303,25 +303,33 @@
 
 	const bulkAssign = async (cadete: CadeteOption) => {
 		const ids = selectedNoAsignadoIds;
-		for (const orderId of ids) {
-			if (cadete.isGuest) {
-				await ordersStore.assignGuest(orderId, cadete.id);
-			} else {
-				await ordersStore.assign(orderId, cadete.id);
+		try {
+			for (const orderId of ids) {
+				if (cadete.isGuest) {
+					await ordersStore.assignGuest(orderId, cadete.id);
+				} else {
+					await ordersStore.assign(orderId, cadete.id);
+				}
 			}
+			bulkAssignOpen = false;
+			selectedOrderIds = new Set();
+			toastsStore.success(ids.length ? `${ids.length} pedido(s) asignado(s) a ${cadete.name}` : 'Ningún pedido no asignado seleccionado');
+		} catch (e) {
+			toastsStore.error(e instanceof Error ? e.message : 'No se pudo asignar. Comprobá la conexión.');
 		}
-		bulkAssignOpen = false;
-		selectedOrderIds = new Set();
-		toastsStore.success(ids.length ? `${ids.length} pedido(s) asignado(s) a ${cadete.name}` : 'Ningún pedido no asignado seleccionado');
 	};
 
 	const bulkUnassign = async () => {
 		const ids = selectedAsignadoIds;
-		for (const orderId of ids) {
-			await ordersStore.unassign(orderId);
+		try {
+			for (const orderId of ids) {
+				await ordersStore.unassign(orderId);
+			}
+			selectedOrderIds = new Set();
+			toastsStore.success(ids.length ? `${ids.length} pedido(s) pasados a No asignado` : 'Ningún pedido asignado seleccionado');
+		} catch (e) {
+			toastsStore.error(e instanceof Error ? e.message : 'No se pudo desasignar. Comprobá la conexión.');
 		}
-		selectedOrderIds = new Set();
-		toastsStore.success(ids.length ? `${ids.length} pedido(s) pasados a No asignado` : 'Ningún pedido asignado seleccionado');
 	};
 
 	const confirmDeleteOrder = async () => {
@@ -451,13 +459,21 @@
 	const assignOrder = async (orderId: string) => {
 		const staffId = cadeteByOrder[orderId];
 		if (!staffId) return;
-		await ordersStore.assign(orderId, staffId);
-		toastsStore.success('Pedido asignado');
+		try {
+			await ordersStore.assign(orderId, staffId);
+			toastsStore.success('Pedido asignado');
+		} catch (e) {
+			toastsStore.error(e instanceof Error ? e.message : 'No se pudo asignar el pedido. Comprobá la conexión.');
+		}
 	};
 
 	const updateStatus = async (orderId: string, status: OrderStatus) => {
-		await ordersStore.updateStatus(orderId, status);
-		toastsStore.success('Pedido actualizado');
+		try {
+			await ordersStore.updateStatus(orderId, status);
+			toastsStore.success('Pedido actualizado');
+		} catch (e) {
+			toastsStore.error(e instanceof Error ? e.message : 'No se pudo actualizar el estado. Comprobá la conexión.');
+		}
 	};
 
 	async function printOrder(order: Order) {
@@ -1160,14 +1176,19 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 													type="button"
 													class="flex w-full items-center gap-2 px-3 py-1.5 pl-5 text-left text-sm hover:bg-slate-100 dark:hover:bg-neutral-700"
 													role="menuitem"
-													onclick={() => {
-														if (cadete.isGuest) {
-															ordersStore.assignGuest(order.id, cadete.id);
-														} else {
-															cadeteByOrder[order.id] = cadete.id;
-															assignOrder(order.id);
+													onclick={async () => {
+														try {
+															if (cadete.isGuest) {
+																await ordersStore.assignGuest(order.id, cadete.id);
+																toastsStore.success('Pedido asignado');
+															} else {
+																cadeteByOrder[order.id] = cadete.id;
+																await assignOrder(order.id);
+															}
+															orderMenuOpenId = null;
+														} catch (e) {
+															toastsStore.error(e instanceof Error ? e.message : 'No se pudo asignar. Comprobá la conexión.');
 														}
-														orderMenuOpenId = null;
 													}}
 												>
 													{cadete.name}
@@ -1179,9 +1200,13 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 												type="button"
 												class="flex w-full items-center gap-2 border-t border-slate-100 px-3 py-2 text-left text-sm hover:bg-slate-100 dark:border-neutral-700 dark:hover:bg-neutral-700"
 												role="menuitem"
-												onclick={() => {
-													updateStatus(order.id, 'COMPLETADO');
-													orderMenuOpenId = null;
+												onclick={async () => {
+													try {
+														await updateStatus(order.id, 'COMPLETADO');
+														orderMenuOpenId = null;
+													} catch {
+														// toast ya mostrado en updateStatus
+													}
 												}}
 											>
 												Marcar como Completado
@@ -1190,9 +1215,15 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 												type="button"
 												class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-neutral-700"
 												role="menuitem"
-												onclick={() => {
-													ordersStore.unassign(order.id);
-													orderMenuOpenId = null;
+												onclick={async () => {
+													try {
+														await ordersStore.unassign(order.id);
+														await ordersStore.load();
+														orderMenuOpenId = null;
+														toastsStore.success('Asignación quitada');
+													} catch (e) {
+														toastsStore.error(e instanceof Error ? e.message : 'No se pudo quitar la asignación.');
+													}
 												}}
 											>
 												Quitar asignación
@@ -1203,9 +1234,13 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 												type="button"
 												class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-neutral-700"
 												role="menuitem"
-												onclick={() => {
-													updateStatus(order.id, 'CANCELADO');
-													orderMenuOpenId = null;
+												onclick={async () => {
+													try {
+														await updateStatus(order.id, 'CANCELADO');
+														orderMenuOpenId = null;
+													} catch {
+														// toast ya mostrado en updateStatus
+													}
 												}}
 											>
 												Cancelar
@@ -1216,9 +1251,13 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 												type="button"
 												class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-neutral-700"
 												role="menuitem"
-												onclick={() => {
-													updateStatus(order.id, 'BORRADOR');
-													orderMenuOpenId = null;
+												onclick={async () => {
+													try {
+														await updateStatus(order.id, 'BORRADOR');
+														orderMenuOpenId = null;
+													} catch {
+														// toast ya mostrado en updateStatus
+													}
 												}}
 											>
 												Pasar a borrador

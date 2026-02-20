@@ -1,8 +1,9 @@
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
 import { api } from '$lib/api';
-import { supabase } from '$lib/supabase/client';
+import { setOn401, supabase } from '$lib/supabase/client';
 import type { AppUser, SessionData, Shift } from '$lib/types';
+import { toastsStore } from '$lib/stores/toasts';
 import { derived, writable } from 'svelte/store';
 import type { User } from '@supabase/supabase-js';
 
@@ -146,18 +147,13 @@ export const sessionStore = {
 					localLocation = 'Ituzaingó';
 				}
 			}
-			try {
-				await supabase.auth.refreshSession();
-			} catch {
-				// Offline o refresh fallido
+			// Solo confiar en sesión si refreshSession() devuelve sesión válida; si falla, no usar getSession() (puede tener token vencido)
+			const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+			if (refreshError || !refreshData?.session) {
+				state.set({ ...initial, location: localLocation, ready: true });
+				return;
 			}
-			let user: User | null = null;
-			try {
-				const { data } = await supabase.auth.getSession();
-				user = data?.session?.user ?? null;
-			} catch {
-				// Supabase auth no disponible
-			}
+			const user: User | null = refreshData.session.user ?? null;
 			// Mostrar app enseguida con usuario mínimo; si no, con ready:true y user:null redirige a login
 			const minimal = minimalUserFromAuth(user);
 			state.set({
@@ -277,6 +273,26 @@ export const sessionStore = {
 
 		return { ok: true as const, needsEmailConfirmation: true };
 	},
+	/**
+	 * Cierra sesión por sesión inválida (ej. 401). Muestra toast y redirige a login.
+	 * Usado por el fetch del cliente Supabase cuando detecta 401 en la API REST.
+	 */
+	clearSessionAndRedirectToLogin: (reason?: string) => {
+		if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(LOGOUT_FLAG_KEY, '1');
+		if (typeof localStorage !== 'undefined') localStorage.setItem(LOGOUT_TS_KEY, String(Date.now()));
+		saveSession(null);
+		state.set({ ...initial, ready: true });
+		toastsStore.error(reason ?? 'La sesión venció. Volvé a iniciar sesión.');
+		Promise.race([
+			supabase.auth.signOut(),
+			new Promise<void>((r) => setTimeout(r, 3_000))
+		])
+			.catch(() => {})
+			.finally(() => {
+				clearSupabaseAuthStorage();
+				goto('/login', { replaceState: true });
+			});
+	},
 	logout: async () => {
 		if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(LOGOUT_FLAG_KEY, '1');
 		if (typeof localStorage !== 'undefined') localStorage.setItem(LOGOUT_TS_KEY, String(Date.now()));
@@ -307,5 +323,9 @@ export const sessionStore = {
 		});
 	}
 };
+
+setOn401(() => {
+	sessionStore.clearSessionAndRedirectToLogin('La sesión venció. Volvé a iniciar sesión.');
+});
 
 export const isAuthenticated = derived(state, ($state) => Boolean($state.user));

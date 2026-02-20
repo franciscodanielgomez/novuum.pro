@@ -242,40 +242,42 @@
 		}
 		isSaving = true;
 		let nextLogoUrl = logoUrl.trim() || null;
+		try {
+			if (selectedLogoFile) {
+				const uploaded = await businessStore.uploadLogo(selectedLogoFile, logoUrl.trim() || null);
+				if (!uploaded.ok) {
+					toastsStore.error(uploaded.message ?? 'No se pudo subir el logo');
+					return;
+				}
+				nextLogoUrl = uploaded.url ?? nextLogoUrl;
+				logoUrl = nextLogoUrl ?? '';
+			}
 
-		if (selectedLogoFile) {
-			const uploaded = await businessStore.uploadLogo(selectedLogoFile, logoUrl.trim() || null);
-			if (!uploaded.ok) {
-				toastsStore.error(uploaded.message ?? 'No se pudo subir el logo');
-				isSaving = false;
+			const ok = await businessStore.updateSettings({
+				companyName,
+				branchName,
+				logoUrl: nextLogoUrl,
+				shippingPrice: $businessStore.shippingPrice,
+				phone: joinPhone(phoneCountryIso, phoneNumber),
+				ticketFontSizePt: $businessStore.ticketFontSizePt,
+				ticketMarginLeft: $businessStore.ticketMarginLeft,
+				ticketMarginRight: $businessStore.ticketMarginRight
+			});
+			if (!ok) {
+				toastsStore.error('No se pudo guardar la configuracion del negocio');
 				return;
 			}
-			nextLogoUrl = uploaded.url ?? nextLogoUrl;
-			logoUrl = nextLogoUrl ?? '';
-		}
-
-		const ok = await businessStore.updateSettings({
-			companyName,
-			branchName,
-			logoUrl: nextLogoUrl,
-			shippingPrice: $businessStore.shippingPrice,
-			phone: joinPhone(phoneCountryIso, phoneNumber),
-			ticketFontSizePt: $businessStore.ticketFontSizePt,
-			ticketMarginLeft: $businessStore.ticketMarginLeft,
-			ticketMarginRight: $businessStore.ticketMarginRight
-		});
-		if (!ok) {
-			toastsStore.error('No se pudo guardar la configuracion del negocio');
+			selectedLogoFile = null;
+			if (logoPreviewUrl) {
+				URL.revokeObjectURL(logoPreviewUrl);
+				logoPreviewUrl = '';
+			}
+			toastsStore.success('Configuracion del negocio actualizada');
+		} catch (e) {
+			toastsStore.error(e instanceof Error ? e.message : 'No se pudo guardar. Comprobá la conexión.');
+		} finally {
 			isSaving = false;
-			return;
 		}
-		selectedLogoFile = null;
-		if (logoPreviewUrl) {
-			URL.revokeObjectURL(logoPreviewUrl);
-			logoPreviewUrl = '';
-		}
-		toastsStore.success('Configuracion del negocio actualizada');
-		isSaving = false;
 	};
 
 	onMount(async () => {
