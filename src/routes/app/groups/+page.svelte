@@ -3,6 +3,7 @@
 	import { DataTable } from '$lib/components/table';
 	import type { DataTableColumn } from '$lib/components/table';
 	import { supabase } from '$lib/supabase/client';
+	import { refreshTrigger } from '$lib/stores/refreshTrigger';
 	import { toastsStore } from '$lib/stores/toasts';
 	import { onMount } from 'svelte';
 
@@ -295,6 +296,17 @@
 
 	onMount(() => {
 		void loadGroups();
+		let firstRefresh = true;
+		const unsub = refreshTrigger.subscribe(() => {
+			if (firstRefresh) {
+				firstRefresh = false;
+				return;
+			}
+			void loadGroups();
+		});
+		return () => {
+			unsub();
+		};
 	});
 
 	const groupColumns: DataTableColumn<Group>[] = [

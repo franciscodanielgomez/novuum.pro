@@ -7,6 +7,7 @@
 		type ProductOptionGroup
 	} from '$lib/schema/product-options';
 	import { productsStore } from '$lib/stores/productsStore';
+	import { refreshTrigger } from '$lib/stores/refreshTrigger';
 	import { fromZustand } from '$lib/stores/zustandBridge';
 	import { toastsStore } from '$lib/stores/toasts';
 	import { formatMoney } from '$lib/utils';
@@ -125,22 +126,31 @@
 		return (data ?? []).map((r) => ({ group_id: r.group_id, max_select: r.max_select ?? 1 }));
 	};
 
+	const LOAD_PRODUCTS_TIMEOUT_MS = 12_000;
 	const loadSupabaseProducts = async () => {
 		productsLoading = true;
-		const { data, error } = await supabase
-			.from('products')
-			.select('id, name, description, price, active, image_url, product_categories(category_id, categories(id, name))')
-			.order('name', { ascending: true });
-		if (error) {
-			toastsStore.error(error.message || 'Error al cargar productos');
-			supabaseProducts = [];
-			products = [];
-		} else {
-			const list = (data ?? []) as unknown as SupabaseProduct[];
-			supabaseProducts = list;
-			products = list.filter((p) => p.active);
+		const timeoutId = setTimeout(() => {
+			productsLoading = false;
+			toastsStore.error('La carga de productos tardó demasiado. Revisá la conexión.');
+		}, LOAD_PRODUCTS_TIMEOUT_MS);
+		try {
+			const { data, error } = await supabase
+				.from('products')
+				.select('id, name, description, price, active, image_url, product_categories(category_id, categories(id, name))')
+				.order('name', { ascending: true });
+			if (error) {
+				toastsStore.error(error.message || 'Error al cargar productos');
+				supabaseProducts = [];
+				products = [];
+			} else {
+				const list = (data ?? []) as unknown as SupabaseProduct[];
+				supabaseProducts = list;
+				products = list.filter((p) => p.active);
+			}
+		} finally {
+			clearTimeout(timeoutId);
+			productsLoading = false;
 		}
-		productsLoading = false;
 	};
 
 	const storeProducts = $derived($productsState.products);
@@ -581,6 +591,19 @@
 			if (saved.pageIndex !== undefined) pageIndex = Math.max(0, saved.pageIndex);
 			if (saved.pageSize !== undefined && PAGE_SIZE_OPTIONS.includes(saved.pageSize)) pageSize = saved.pageSize;
 		}
+		let firstRefresh = true;
+		const unsub = refreshTrigger.subscribe(() => {
+			if (firstRefresh) {
+				firstRefresh = false;
+				return;
+			}
+			void loadCategories();
+			void loadProductGroups();
+			void loadSupabaseProducts();
+		});
+		return () => {
+			unsub();
+		};
 	});
 
 	$effect(() => {

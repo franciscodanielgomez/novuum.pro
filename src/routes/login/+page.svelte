@@ -8,53 +8,77 @@
 	import { toastsStore } from '$lib/stores/toasts';
 	import { onMount } from 'svelte';
 
-	let mode: 'login' | 'register' | 'forgot' = 'login';
-	let fullName = '';
-	let email = '';
-	let password = '';
-	let loading = false;
-	let showPassword = false;
+	let mode = $state<'login' | 'register' | 'forgot'>('login');
+	let fullName = $state('');
+	let email = $state('');
+	let password = $state('');
+	let loading = $state(false);
+	let showPassword = $state(false);
+	let loginError = $state('');
 
 	const onSubmit = async () => {
 		loading = true;
-		if (mode === 'forgot') {
-			const redirectTo = browser ? `${window.location.origin}/login` : undefined;
-			const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
-			loading = false;
-			if (error) {
-				toastsStore.error(error.message ?? 'No se pudo enviar el correo de recuperación');
+		loginError = '';
+		try {
+			if (mode === 'forgot') {
+				const redirectTo = browser ? `${window.location.origin}/login` : undefined;
+				const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+				if (error) {
+					toastsStore.error(error.message ?? 'No se pudo enviar el correo de recuperación');
+					return;
+				}
+				toastsStore.success('Te enviamos un correo para recuperar la contraseña');
+				mode = 'login';
 				return;
 			}
-			toastsStore.success('Te enviamos un correo para recuperar la contraseña');
-			mode = 'login';
-			return;
-		}
 
-		if (mode === 'login') {
-			const result = await sessionStore.login(email, password);
-			loading = false;
+			if (mode === 'login') {
+				const result = await sessionStore.login(email, password);
+				if (!result.ok) {
+					// Limpiar estado de auth para que el próximo intento (con la clave correcta) funcione
+					supabase.auth.signOut().catch(() => {});
+					let msg = result.message ?? 'No se pudo iniciar sesión';
+					if (/invalid.*credentials|invalid login|email.*password|contraseña|password/i.test(msg)) {
+						msg = 'Correo o contraseña incorrectos. Revisá los datos e intentá de nuevo.';
+					}
+					loginError = msg;
+					toastsStore.error(msg);
+					return;
+				}
+				loading = false;
+				toastsStore.success('Sesión iniciada');
+				if (browser) {
+					window.location.href = '/app';
+				} else {
+					await goto('/app');
+				}
+				return;
+			}
+
+			const result = await sessionStore.register(email, password, fullName);
 			if (!result.ok) {
-				toastsStore.error(result.message ?? 'No se pudo iniciar sesión');
+				toastsStore.error(result.message ?? 'No se pudo registrar');
 				return;
 			}
-			toastsStore.success('Sesión iniciada');
-			await goto('/app');
-			return;
+			if (result.needsEmailConfirmation) {
+				toastsStore.info('Registro creado. Te llegará un email de Supabase para verificar tu cuenta.');
+				mode = 'login';
+				return;
+			}
+			loading = false;
+			toastsStore.success('Cuenta creada y sesión iniciada');
+			if (browser) {
+				window.location.href = '/app';
+			} else {
+				await goto('/app');
+			}
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : 'Error inesperado. Revisá la conexión.';
+			loginError = msg;
+			toastsStore.error(msg);
+		} finally {
+			loading = false;
 		}
-
-		const result = await sessionStore.register(email, password, fullName);
-		loading = false;
-		if (!result.ok) {
-			toastsStore.error(result.message ?? 'No se pudo registrar');
-			return;
-		}
-		if (result.needsEmailConfirmation) {
-			toastsStore.info('Registro creado. Te llegará un email de Supabase para verificar tu cuenta.');
-			mode = 'login';
-			return;
-		}
-		toastsStore.success('Cuenta creada y sesión iniciada');
-		await goto('/app');
 	};
 
 	onMount(() => {
@@ -137,13 +161,18 @@
 							class="w-full rounded-2xl border border-slate-300/80 bg-white/85 px-4 py-3 pr-20 text-sm text-slate-900 outline-none transition focus:border-slate-700 focus:ring-2 focus:ring-slate-300/60 dark:border-white/20 dark:bg-black/20 dark:text-slate-100 dark:focus:border-slate-200 dark:focus:ring-slate-700/60"
 							type={showPassword ? 'text' : 'password'}
 							bind:value={password}
+							oninput={() => (loginError = '')}
 							minlength={6}
 							required
 						/>
 						<button
 							type="button"
 							class="absolute right-3 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-md text-slate-700 transition hover:bg-slate-200/70 hover:text-slate-950 dark:text-slate-300 dark:hover:bg-white/10 dark:hover:text-white"
-							onclick={() => (showPassword = !showPassword)}
+							onclick={(e) => {
+								e.preventDefault();
+								e.stopPropagation();
+								showPassword = !showPassword;
+							}}
 							aria-label={showPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}
 						>
 							{#if showPassword}
@@ -190,6 +219,7 @@
 						onclick={() => {
 							mode = 'forgot';
 							showPassword = false;
+							loginError = '';
 						}}
 					>
 						¿Olvidaste tu contrasena?
@@ -200,6 +230,12 @@
 			{#if mode === 'register'}
 				<p class="text-xs text-slate-700 dark:text-slate-300/80">
 					Al registrarte, Supabase enviará un email para verificar tu cuenta antes de ingresar.
+				</p>
+			{/if}
+
+			{#if mode === 'login' && loginError}
+				<p class="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200" role="alert">
+					{loginError}
 				</p>
 			{/if}
 
@@ -222,6 +258,7 @@
 						onclick={() => {
 							mode = 'register';
 							showPassword = false;
+							loginError = '';
 						}}
 					>
 						Registrarse
@@ -236,6 +273,7 @@
 						onclick={() => {
 							mode = 'login';
 							showPassword = false;
+							loginError = '';
 						}}
 					>
 						Iniciar sesion
@@ -250,6 +288,7 @@
 						onclick={() => {
 							mode = 'login';
 							showPassword = false;
+							loginError = '';
 						}}
 					>
 						Volver a iniciar sesion

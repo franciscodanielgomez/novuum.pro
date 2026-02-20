@@ -7,6 +7,8 @@ import { derived, writable } from 'svelte/store';
 import type { User } from '@supabase/supabase-js';
 
 const SESSION_KEY = 'grido_v0_session';
+/** Marca que el usuario cerró sesión; evita que hydrate() restaure la sesión al volver atrás o al entrar por link */
+const LOGOUT_FLAG_KEY = 'novum_logout';
 
 type SessionState = {
 	user: AppUser | null;
@@ -82,54 +84,68 @@ export const sessionStore = {
 	subscribe: state.subscribe,
 	hydrate: async () => {
 		if (!browser) return;
-		const raw = localStorage.getItem(SESSION_KEY);
-		let localLocation: SessionData['location'] = 'Ituzaingó';
-		if (raw) {
+		// Si cerró sesión, no restaurar usuario desde Supabase (evita entrar por link o atrás)
+		if (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(LOGOUT_FLAG_KEY) === '1') {
+			sessionStorage.removeItem(LOGOUT_FLAG_KEY);
+			state.set({ ...initial, ready: true });
+			return;
+		}
+		const READY_TIMEOUT_MS = 8_000;
+		const readyTimeoutId = setTimeout(() => {
+			state.update((s) => (s.ready ? s : { ...s, ready: true }));
+		}, READY_TIMEOUT_MS);
+		try {
+			const raw = localStorage.getItem(SESSION_KEY);
+			let localLocation: SessionData['location'] = 'Ituzaingó';
+			if (raw) {
+				try {
+					localLocation = (JSON.parse(raw) as SessionData).location ?? 'Ituzaingó';
+				} catch {
+					localLocation = 'Ituzaingó';
+				}
+			}
+			let shift: Shift | null = null;
+			let user: User | null = null;
 			try {
-				localLocation = (JSON.parse(raw) as SessionData).location ?? 'Ituzaingó';
+				shift = await api.shifts.getOpen();
 			} catch {
-				localLocation = 'Ituzaingó';
+				// Sin conexión con la API
 			}
-		}
-		let shift: Shift | null = null;
-		let user: User | null = null;
-		try {
-			shift = await api.shifts.getOpen();
-		} catch {
-			// Sin conexión con la API
-		}
-		try {
-			// Forzar refresh del token para no quedarse colgado cuando la sesión expira tras minutos inactivo
-			await supabase.auth.refreshSession();
-		} catch {
-			// Offline o refresh fallido; getSession() seguirá con lo que haya en memoria
-		}
-		try {
-			const { data } = await supabase.auth.getSession();
-			user = data?.session?.user ?? null;
-		} catch {
-			// Supabase auth no disponible
-		}
-		let mappedUser: AppUser | null = null;
-		try {
-			mappedUser = await mapUser(user);
-		} catch {
-			// Perfil no cargó; usar datos básicos del auth si hay user
-			if (user?.id && user?.email) {
-				mappedUser = {
-					id: user.id,
-					email: user.email,
-					name: (user.user_metadata?.name as string)?.trim() || user.email,
-					role: 'CAJERO'
-				};
+			try {
+				// Forzar refresh del token para no quedarse colgado cuando la sesión expira tras minutos inactivo
+				await supabase.auth.refreshSession();
+			} catch {
+				// Offline o refresh fallido; getSession() seguirá con lo que haya en memoria
 			}
+			try {
+				const { data } = await supabase.auth.getSession();
+				user = data?.session?.user ?? null;
+			} catch {
+				// Supabase auth no disponible
+			}
+			let mappedUser: AppUser | null = null;
+			try {
+				mappedUser = await mapUser(user);
+			} catch {
+				// Perfil no cargó; usar datos básicos del auth si hay user
+				if (user?.id && user?.email) {
+					mappedUser = {
+						id: user.id,
+						email: user.email,
+						name: (user.user_metadata?.name as string)?.trim() || user.email,
+						role: 'CAJERO'
+					};
+				}
+			}
+			state.set({
+				user: mappedUser,
+				location: localLocation,
+				shift,
+				ready: true
+			});
+		} finally {
+			clearTimeout(readyTimeoutId);
 		}
-		state.set({
-			user: mappedUser,
-			location: localLocation,
-			shift,
-			ready: true
-		});
 
 		if (listenerInitialized) return;
 		listenerInitialized = true;
@@ -165,6 +181,7 @@ export const sessionStore = {
 			if (error || !data.user) {
 				return { ok: false, message: error?.message ?? 'No se pudo iniciar sesión' };
 			}
+			if (typeof sessionStorage !== 'undefined') sessionStorage.removeItem(LOGOUT_FLAG_KEY);
 			saveSession({ location: 'Ituzaingó' });
 			const shift = await api.shifts.getOpen();
 			const mappedUser = await mapUser(data.user);
@@ -207,10 +224,12 @@ export const sessionStore = {
 		return { ok: true as const, needsEmailConfirmation: true };
 	},
 	logout: async () => {
-		await supabase.auth.signOut();
+		if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(LOGOUT_FLAG_KEY, '1');
 		saveSession(null);
 		state.set({ ...initial, ready: true });
-		await goto('/login');
+		await goto('/login', { replaceState: true });
+		// En Tauri la llamada a signOut a veces cuelga; no bloquear la salida
+		supabase.auth.signOut().catch(() => {});
 	},
 	setShift(shift: Shift | null) {
 		state.update((s) => ({ ...s, shift }));

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { businessStore } from '$lib/stores/business';
+	import { refreshTrigger } from '$lib/stores/refreshTrigger';
 	import { supabase } from '$lib/supabase/client';
 	import { toastsStore } from '$lib/stores/toasts';
 	import {
@@ -12,6 +13,7 @@
 	import { demoTicketText } from '$lib/printing/ticket-layout';
 	import { isUpdaterAvailable } from '$lib/updater';
 	import { updateStore } from '$lib/stores/updateStore';
+	import { get } from 'svelte/store';
 	import { onMount } from 'svelte';
 
 	type PaymentMethod = { id: string; name: string; sort_order: number; active: boolean };
@@ -185,22 +187,44 @@
 		}
 	}
 
-	onMount(async () => {
-		try {
-			await businessStore.load();
-			shippingPriceInput = String($businessStore.shippingPrice);
-			ticketFontSizeInput = String($businessStore.ticketFontSizePt ?? 30);
-			ticketMarginLeftInput = String($businessStore.ticketMarginLeft ?? 5);
-			ticketMarginRightInput = String($businessStore.ticketMarginRight ?? 40);
-			await loadPaymentMethods();
-			const saved = getSavedPrinterName() ?? '';
-			selectedPrinter = saved;
-			savedPrinterDisplay = saved;
-		} catch (e) {
-			toastsStore.error('Error al cargar configuraciones. Revisá la conexión.');
-		} finally {
-			loading = false;
-		}
+	onMount(() => {
+		// Mostrar el formulario al instante con datos del store (layout ya suele tenerlos)
+		const store = get(businessStore);
+		shippingPriceInput = String(store.shippingPrice);
+		ticketFontSizeInput = String(store.ticketFontSizePt ?? 30);
+		ticketMarginLeftInput = String(store.ticketMarginLeft ?? 5);
+		ticketMarginRightInput = String(store.ticketMarginRight ?? 40);
+		const saved = getSavedPrinterName() ?? '';
+		selectedPrinter = saved;
+		savedPrinterDisplay = saved;
+		loading = false;
+
+		// Refrescar datos en segundo plano (no bloquear la UI)
+		const refreshSettingsData = async () => {
+			try {
+				await businessStore.load();
+				const s = get(businessStore);
+				shippingPriceInput = String(s.shippingPrice);
+				ticketFontSizeInput = String(s.ticketFontSizePt ?? 30);
+				ticketMarginLeftInput = String(s.ticketMarginLeft ?? 5);
+				ticketMarginRightInput = String(s.ticketMarginRight ?? 40);
+				await loadPaymentMethods();
+			} catch {
+				toastsStore.error('Error al cargar configuraciones. Revisá la conexión.');
+			}
+		};
+		void refreshSettingsData();
+		let firstRefresh = true;
+		const unsub = refreshTrigger.subscribe(() => {
+			if (firstRefresh) {
+				firstRefresh = false;
+				return;
+			}
+			void refreshSettingsData();
+		});
+		return () => {
+			unsub();
+		};
 	});
 </script>
 

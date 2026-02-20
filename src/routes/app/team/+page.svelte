@@ -2,6 +2,7 @@
 	import SideDrawer from '$lib/components/SideDrawer.svelte';
 	import { DataTable } from '$lib/components/table';
 	import type { DataTableColumn } from '$lib/components/table';
+	import { refreshTrigger } from '$lib/stores/refreshTrigger';
 	import { staffStore } from '$lib/stores/staff';
 	import { staffGuestsStore } from '$lib/stores/staffGuests';
 	import { sessionStore } from '$lib/stores/session';
@@ -183,12 +184,27 @@
 		newGuestForm = { name: '', roles: ['CAJERO'], email: '', phone: '', active: true };
 	};
 
+	const LOAD_TIMEOUT_MS = 12_000;
 	onMount(async () => {
 		try {
-			await Promise.all([staffStore.load(), staffGuestsStore.load()]);
+			await Promise.race([
+				Promise.all([staffStore.load(), staffGuestsStore.load()]),
+				new Promise<void>((r) => setTimeout(r, LOAD_TIMEOUT_MS))
+			]);
 		} finally {
 			loading = false;
 		}
+		let firstRefresh = true;
+		const unsub = refreshTrigger.subscribe(() => {
+			if (firstRefresh) {
+				firstRefresh = false;
+				return;
+			}
+			void Promise.all([staffStore.load(), staffGuestsStore.load()]);
+		});
+		return () => {
+			unsub();
+		};
 	});
 </script>
 

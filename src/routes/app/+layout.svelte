@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
-	import ToastHost from '$lib/components/ToastHost.svelte';
 	import { desktopDownloadStore } from '$lib/desktop-download';
 	import { isTauri } from '$lib/printing/printer';
 	import LogoNovuum from '$lib/components/LogoNovuum.svelte';
 	import { businessStore } from '$lib/stores/business';
+	import { refreshTrigger } from '$lib/stores/refreshTrigger';
 	import { sessionStore } from '$lib/stores/session';
 	import { themeStore } from '$lib/stores/theme';
 	import { updateStore } from '$lib/stores/updateStore';
@@ -103,28 +103,36 @@
 		} else {
 			desktopDownloadStore.init();
 		}
-		// Revalidar sesión cada 15 min para mantener el token fresco y evitar quedarse colgado
-		const REVALIDATE_MS = 15 * 60 * 1000;
-		const interval = setInterval(() => {
+		// Revalidar sesión cada 5 min para que la app siga reconociendo que estás registrado
+		const SESSION_REVALIDATE_MS = 5 * 60 * 1000;
+		const sessionInterval = setInterval(() => {
 			void sessionStore.hydrate();
-		}, REVALIDATE_MS);
-		// Al volver a la pestaña/app, revalidar sesión de inmediato (evita colgarse tras unos minutos inactivo)
+		}, SESSION_REVALIDATE_MS);
+		// Cada 2 min y al volver a la pestaña: refrescar negocio y avisar a la página actual para que recargue datos
+		const refreshData = () => {
+			void businessStore.load();
+			refreshTrigger.update((n) => n + 1);
+		};
+		const DATA_REFRESH_MS = 2 * 60 * 1000;
+		const dataInterval = setInterval(refreshData, DATA_REFRESH_MS);
 		const onVisibilityChange = () => {
 			if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
 				void sessionStore.hydrate();
+				refreshData();
 			}
 		};
 		document.addEventListener('visibilitychange', onVisibilityChange);
 		return () => {
-			clearInterval(interval);
+			clearInterval(sessionInterval);
+			clearInterval(dataInterval);
 			document.removeEventListener('visibilitychange', onVisibilityChange);
 		};
 	});
 
-	// Si la sesión se invalida (token expirado, cierre en otro tab), redirigir a login
+	// Si la sesión se invalida (token expirado, cierre en otro tab), redirigir a login sin dejar /app en el historial
 	$effect(() => {
 		if (browser && $sessionStore.ready && !$sessionStore.user) {
-			goto('/login');
+			goto('/login', { replaceState: true });
 		}
 	});
 
@@ -605,5 +613,3 @@
 	</div>
 </div>
 {/if}
-
-<ToastHost />

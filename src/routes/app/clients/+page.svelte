@@ -4,6 +4,7 @@
 	import type { DataTableColumn } from '$lib/components/table';
 	import { customerSchema, customersBulkSchema } from '$lib/schemas';
 	import { customersStore } from '$lib/stores/customers';
+	import { refreshTrigger } from '$lib/stores/refreshTrigger';
 	import { toastsStore } from '$lib/stores/toasts';
 	import type { Customer } from '$lib/types';
 	import { goto } from '$app/navigation';
@@ -70,18 +71,35 @@
 		drawerOpen = false;
 	};
 
+	const LOAD_TIMEOUT_MS = 12_000;
 	onMount(async () => {
 		try {
-			await customersStore.load();
-			const editId = $page.url.searchParams.get('editId');
-			if (editId) {
-				const customer = $customersStore.find((c) => c.id === editId);
-				if (customer) openEdit(customer);
-				await goto('/app/clients', { replaceState: true });
-			}
+			await Promise.race([
+				(async () => {
+					await customersStore.load();
+					const editId = $page.url.searchParams.get('editId');
+					if (editId) {
+						const customer = $customersStore.find((c) => c.id === editId);
+						if (customer) openEdit(customer);
+						await goto('/app/clients', { replaceState: true });
+					}
+				})(),
+				new Promise<void>((r) => setTimeout(r, LOAD_TIMEOUT_MS))
+			]);
 		} finally {
 			loading = false;
 		}
+		let firstRefresh = true;
+		const unsub = refreshTrigger.subscribe(() => {
+			if (firstRefresh) {
+				firstRefresh = false;
+				return;
+			}
+			void customersStore.load();
+		});
+		return () => {
+			unsub();
+		};
 	});
 </script>
 

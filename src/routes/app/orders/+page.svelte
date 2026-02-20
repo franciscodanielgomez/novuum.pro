@@ -8,6 +8,7 @@
 	import DataTablePaginator from '$lib/components/table/DataTablePaginator.svelte';
 	import { loadTableState, saveTableState } from '$lib/components/table/table.state';
 	import { ordersStore } from '$lib/stores/orders';
+	import { refreshTrigger } from '$lib/stores/refreshTrigger';
 	import { staffStore } from '$lib/stores/staff';
 	import { staffGuestsStore } from '$lib/stores/staffGuests';
 	import { toastsStore } from '$lib/stores/toasts';
@@ -507,14 +508,33 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 		}
 	}
 
+	const LOAD_TIMEOUT_MS = 12_000;
+	const loadOrdersData = () =>
+		Promise.all([ordersStore.load(), staffStore.load(), staffGuestsStore.load()]).catch(() => {
+			toastsStore.error(
+				'No se pudieron cargar los pedidos. Comprobá la conexión e iniciá sesión de nuevo si hace falta.'
+			);
+		});
+
 	onMount(async () => {
 		try {
-			await Promise.all([ordersStore.load(), staffStore.load(), staffGuestsStore.load()]);
+			await Promise.race([
+				loadOrdersData(),
+				new Promise<void>((r) => setTimeout(r, LOAD_TIMEOUT_MS))
+			]);
 		} catch {
 			toastsStore.error(
 				'No se pudieron cargar los pedidos. Comprobá la conexión e iniciá sesión de nuevo si hace falta.'
 			);
 		}
+		let firstRefresh = true;
+		const unsubRefresh = refreshTrigger.subscribe(() => {
+			if (firstRefresh) {
+				firstRefresh = false;
+				return;
+			}
+			void loadOrdersData();
+		});
 		if (browser) {
 			const saved = loadTableState('pedidos');
 			if (saved?.globalFilter !== undefined) query = saved.globalFilter;
@@ -551,6 +571,9 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 				sortDir = sort[0].desc ? 'desc' : 'asc';
 			}
 		}
+		return () => {
+			unsubRefresh();
+		};
 	});
 </script>
 
