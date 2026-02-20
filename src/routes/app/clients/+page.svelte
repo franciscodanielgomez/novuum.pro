@@ -72,33 +72,36 @@
 	};
 
 	const LOAD_TIMEOUT_MS = 12_000;
-	onMount(async () => {
-		try {
-			await Promise.race([
-				(async () => {
-					await customersStore.load();
-					const editId = $page.url.searchParams.get('editId');
-					if (editId) {
-						const customer = $customersStore.find((c) => c.id === editId);
-						if (customer) openEdit(customer);
-						await goto('/app/clients', { replaceState: true });
-					}
-				})(),
-				new Promise<void>((r) => setTimeout(r, LOAD_TIMEOUT_MS))
-			]);
-		} finally {
-			loading = false;
-		}
-		let firstRefresh = true;
-		const unsub = refreshTrigger.subscribe(() => {
-			if (firstRefresh) {
-				firstRefresh = false;
-				return;
+	let refreshUnsub: (() => void) | null = null;
+	onMount(() => {
+		void (async () => {
+			try {
+				await Promise.race([
+					(async () => {
+						await customersStore.load();
+						const editId = $page.url.searchParams.get('editId');
+						if (editId) {
+							const customer = $customersStore.find((c) => c.id === editId);
+							if (customer) openEdit(customer);
+							await goto('/app/clients', { replaceState: true });
+						}
+					})(),
+					new Promise<void>((r) => setTimeout(r, LOAD_TIMEOUT_MS))
+				]);
+			} finally {
+				loading = false;
 			}
-			void customersStore.load();
-		});
+			let firstRefresh = true;
+			refreshUnsub = refreshTrigger.subscribe(() => {
+				if (firstRefresh) {
+					firstRefresh = false;
+					return;
+				}
+				void customersStore.load();
+			});
+		})();
 		return () => {
-			unsub();
+			refreshUnsub?.();
 		};
 	});
 </script>

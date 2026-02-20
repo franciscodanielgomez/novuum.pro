@@ -185,25 +185,28 @@
 	};
 
 	const LOAD_TIMEOUT_MS = 12_000;
-	onMount(async () => {
-		try {
-			await Promise.race([
-				Promise.all([staffStore.load(), staffGuestsStore.load()]),
-				new Promise<void>((r) => setTimeout(r, LOAD_TIMEOUT_MS))
-			]);
-		} finally {
-			loading = false;
-		}
-		let firstRefresh = true;
-		const unsub = refreshTrigger.subscribe(() => {
-			if (firstRefresh) {
-				firstRefresh = false;
-				return;
+	let refreshUnsub: (() => void) | null = null;
+	onMount(() => {
+		void (async () => {
+			try {
+				await Promise.race([
+					Promise.all([staffStore.load(), staffGuestsStore.load()]),
+					new Promise<void>((r) => setTimeout(r, LOAD_TIMEOUT_MS))
+				]);
+			} finally {
+				loading = false;
 			}
-			void Promise.all([staffStore.load(), staffGuestsStore.load()]);
-		});
+			let firstRefresh = true;
+			refreshUnsub = refreshTrigger.subscribe(() => {
+				if (firstRefresh) {
+					firstRefresh = false;
+					return;
+				}
+				void Promise.all([staffStore.load(), staffGuestsStore.load()]);
+			});
+		})();
 		return () => {
-			unsub();
+			refreshUnsub?.();
 		};
 	});
 </script>

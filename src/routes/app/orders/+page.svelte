@@ -516,63 +516,66 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 			);
 		});
 
-	onMount(async () => {
-		try {
-			await Promise.race([
-				loadOrdersData(),
-				new Promise<void>((r) => setTimeout(r, LOAD_TIMEOUT_MS))
-			]);
-		} catch {
-			toastsStore.error(
-				'No se pudieron cargar los pedidos. Comprobá la conexión e iniciá sesión de nuevo si hace falta.'
-			);
-		}
-		let firstRefresh = true;
-		const unsubRefresh = refreshTrigger.subscribe(() => {
-			if (firstRefresh) {
-				firstRefresh = false;
-				return;
+	let refreshUnsub: (() => void) | null = null;
+	onMount(() => {
+		void (async () => {
+			try {
+				await Promise.race([
+					loadOrdersData(),
+					new Promise<void>((r) => setTimeout(r, LOAD_TIMEOUT_MS))
+				]);
+			} catch {
+				toastsStore.error(
+					'No se pudieron cargar los pedidos. Comprobá la conexión e iniciá sesión de nuevo si hace falta.'
+				);
 			}
-			void loadOrdersData();
-		});
-		if (browser) {
-			const saved = loadTableState('pedidos');
-			if (saved?.globalFilter !== undefined) query = saved.globalFilter;
-			if (saved?.pagination) {
-				pageIndex = Math.max(0, saved.pagination.pageIndex);
-				pageSize = PAGE_SIZE_OPTIONS.includes(saved.pagination.pageSize) ? saved.pagination.pageSize : 20;
+			let firstRefresh = true;
+			refreshUnsub = refreshTrigger.subscribe(() => {
+				if (firstRefresh) {
+					firstRefresh = false;
+					return;
+				}
+				void loadOrdersData();
+			});
+			if (browser) {
+				const saved = loadTableState('pedidos');
+				if (saved?.globalFilter !== undefined) query = saved.globalFilter;
+				if (saved?.pagination) {
+					pageIndex = Math.max(0, saved.pagination.pageIndex);
+					pageSize = PAGE_SIZE_OPTIONS.includes(saved.pagination.pageSize) ? saved.pagination.pageSize : 20;
+				}
+				if (saved?.filters && typeof saved.filters === 'object') {
+					const f = saved.filters as {
+						status?: StatusFilterValue;
+						todayOnly?: boolean;
+						dateFrom?: string;
+						dateTo?: string;
+						cashier?: string;
+						createdByUserId?: string;
+						cadeteId?: string;
+						customerId?: string;
+					};
+					if (f.status && STATUS_OPTIONS.includes(f.status as StatusFilterValue))
+						statusFilter = f.status as StatusFilterValue;
+					// todayOnly no se restaura: al abrir /orders siempre se muestran solo los de hoy
+					if (typeof f.dateFrom === 'string') filterDateFrom = f.dateFrom;
+					if (typeof f.dateTo === 'string') filterDateTo = f.dateTo;
+					if (typeof f.cashier === 'string') filterCashier = f.cashier;
+					if (typeof f.createdByUserId === 'string') filterCreatedByUserId = f.createdByUserId;
+					if (typeof f.cadeteId === 'string') filterCadeteId = f.cadeteId;
+					if (typeof f.customerId === 'string') filterCustomerId = f.customerId;
+				}
+				if (saved?.columnVisibility && Object.keys(saved.columnVisibility).length)
+					columnVisibility = { ...columnVisibility, ...saved.columnVisibility };
+				const sort = saved?.sorting;
+				if (Array.isArray(sort) && sort[0] && ORDER_TABLE_COLUMNS.some((c) => c.id === sort[0].id)) {
+					sortColumn = sort[0].id as SortColumn;
+					sortDir = sort[0].desc ? 'desc' : 'asc';
+				}
 			}
-			if (saved?.filters && typeof saved.filters === 'object') {
-				const f = saved.filters as {
-					status?: StatusFilterValue;
-					todayOnly?: boolean;
-					dateFrom?: string;
-					dateTo?: string;
-					cashier?: string;
-					createdByUserId?: string;
-					cadeteId?: string;
-					customerId?: string;
-				};
-				if (f.status && STATUS_OPTIONS.includes(f.status as StatusFilterValue))
-					statusFilter = f.status as StatusFilterValue;
-				// todayOnly no se restaura: al abrir /orders siempre se muestran solo los de hoy
-				if (typeof f.dateFrom === 'string') filterDateFrom = f.dateFrom;
-				if (typeof f.dateTo === 'string') filterDateTo = f.dateTo;
-				if (typeof f.cashier === 'string') filterCashier = f.cashier;
-				if (typeof f.createdByUserId === 'string') filterCreatedByUserId = f.createdByUserId;
-				if (typeof f.cadeteId === 'string') filterCadeteId = f.cadeteId;
-				if (typeof f.customerId === 'string') filterCustomerId = f.customerId;
-			}
-			if (saved?.columnVisibility && Object.keys(saved.columnVisibility).length)
-				columnVisibility = { ...columnVisibility, ...saved.columnVisibility };
-			const sort = saved?.sorting;
-			if (Array.isArray(sort) && sort[0] && ORDER_TABLE_COLUMNS.some((c) => c.id === sort[0].id)) {
-				sortColumn = sort[0].id as SortColumn;
-				sortDir = sort[0].desc ? 'desc' : 'asc';
-			}
-		}
+		})();
 		return () => {
-			unsubRefresh();
+			refreshUnsub?.();
 		};
 	});
 </script>
