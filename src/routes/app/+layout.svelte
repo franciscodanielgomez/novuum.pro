@@ -103,11 +103,22 @@
 		} else {
 			desktopDownloadStore.init();
 		}
-		// Revalidar sesión cada 45 min para evitar quedarse "colgado" cuando el token expira
+		// Revalidar sesión cada 15 min para mantener el token fresco y evitar quedarse colgado
+		const REVALIDATE_MS = 15 * 60 * 1000;
 		const interval = setInterval(() => {
-			sessionStore.hydrate();
-		}, 45 * 60 * 1000);
-		return () => clearInterval(interval);
+			void sessionStore.hydrate();
+		}, REVALIDATE_MS);
+		// Al volver a la pestaña/app, revalidar sesión de inmediato (evita colgarse tras unos minutos inactivo)
+		const onVisibilityChange = () => {
+			if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+				void sessionStore.hydrate();
+			}
+		};
+		document.addEventListener('visibilitychange', onVisibilityChange);
+		return () => {
+			clearInterval(interval);
+			document.removeEventListener('visibilitychange', onVisibilityChange);
+		};
 	});
 
 	// Si la sesión se invalida (token expirado, cierre en otro tab), redirigir a login

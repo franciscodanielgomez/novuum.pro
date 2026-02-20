@@ -3,7 +3,9 @@ import { removeStorageFileIfOurs } from '$lib/supabase/storage-helpers';
 import { get, writable } from 'svelte/store';
 
 const DEFAULT_TICKET_FONT_PT = 30;
-const DEFAULT_TICKET_MARGIN = 20;
+/** Valores del software VB que imprime bien: Left=5, Right=40 */
+const DEFAULT_TICKET_MARGIN_LEFT = 5;
+const DEFAULT_TICKET_MARGIN_RIGHT = 40;
 
 type BusinessSettings = {
 	companyName: string;
@@ -36,8 +38,8 @@ const DEFAULT_SETTINGS: BusinessSettings = {
 	shippingPrice: 0,
 	phone: null,
 	ticketFontSizePt: DEFAULT_TICKET_FONT_PT,
-	ticketMarginLeft: DEFAULT_TICKET_MARGIN,
-	ticketMarginRight: DEFAULT_TICKET_MARGIN
+	ticketMarginLeft: DEFAULT_TICKET_MARGIN_LEFT,
+	ticketMarginRight: DEFAULT_TICKET_MARGIN_RIGHT
 };
 
 const state = writable<BusinessState>({
@@ -72,8 +74,8 @@ const readFallback = (): BusinessSettings => {
 			shippingPrice: num(parsed.shippingPrice, DEFAULT_SETTINGS.shippingPrice),
 			phone: typeof parsed.phone === 'string' ? (parsed.phone.trim() || null) : DEFAULT_SETTINGS.phone,
 			ticketFontSizePt: num(parsed.ticketFontSizePt, DEFAULT_TICKET_FONT_PT),
-			ticketMarginLeft: num(parsed.ticketMarginLeft, DEFAULT_TICKET_MARGIN),
-			ticketMarginRight: num(parsed.ticketMarginRight, DEFAULT_TICKET_MARGIN)
+			ticketMarginLeft: num(parsed.ticketMarginLeft, DEFAULT_TICKET_MARGIN_LEFT),
+			ticketMarginRight: num(parsed.ticketMarginRight, DEFAULT_TICKET_MARGIN_RIGHT)
 		};
 	} catch {
 		return DEFAULT_SETTINGS;
@@ -107,8 +109,8 @@ export const businessStore = {
 					shippingPrice: num(data.shipping_price, DEFAULT_SETTINGS.shippingPrice),
 					phone: data.phone?.trim() || null,
 					ticketFontSizePt: num(data.ticket_font_size_pt, DEFAULT_TICKET_FONT_PT),
-					ticketMarginLeft: num(data.ticket_margin_left, DEFAULT_TICKET_MARGIN),
-					ticketMarginRight: num(data.ticket_margin_right, DEFAULT_TICKET_MARGIN)
+					ticketMarginLeft: num(data.ticket_margin_left, DEFAULT_TICKET_MARGIN_LEFT),
+					ticketMarginRight: num(data.ticket_margin_right, DEFAULT_TICKET_MARGIN_RIGHT)
 				};
 				writeFallback(next);
 				state.set({ id: data.id, ...next, loading: false });
@@ -127,8 +129,8 @@ export const businessStore = {
 		const phone = settings.phone?.trim() || null;
 		const num = (v: unknown, def: number) => (typeof v === 'number' && !Number.isNaN(v) ? v : def);
 		const ticketFontSizePt = num(settings.ticketFontSizePt, DEFAULT_TICKET_FONT_PT);
-		const ticketMarginLeft = num(settings.ticketMarginLeft, DEFAULT_TICKET_MARGIN);
-		const ticketMarginRight = num(settings.ticketMarginRight, DEFAULT_TICKET_MARGIN);
+		const ticketMarginLeft = num(settings.ticketMarginLeft, DEFAULT_TICKET_MARGIN_LEFT);
+		const ticketMarginRight = num(settings.ticketMarginRight, DEFAULT_TICKET_MARGIN_RIGHT);
 		if (!companyName || !branchName) return false;
 		const current = get(state);
 		const payload = {
@@ -175,8 +177,8 @@ export const businessStore = {
 				shippingPrice: num(data.shipping_price, shippingPrice),
 				phone: data.phone?.trim() || null,
 				ticketFontSizePt: num(data.ticket_font_size_pt, DEFAULT_TICKET_FONT_PT),
-				ticketMarginLeft: num(data.ticket_margin_left, DEFAULT_TICKET_MARGIN),
-				ticketMarginRight: num(data.ticket_margin_right, DEFAULT_TICKET_MARGIN)
+				ticketMarginLeft: num(data.ticket_margin_left, DEFAULT_TICKET_MARGIN_LEFT),
+				ticketMarginRight: num(data.ticket_margin_right, DEFAULT_TICKET_MARGIN_RIGHT)
 			};
 			writeFallback(next);
 			state.set({ id: data.id, ...next, loading: false });
@@ -212,6 +214,52 @@ export const businessStore = {
 			return true;
 		}
 		return false;
+	},
+
+	/**
+	 * Actualiza solo la configuración de impresión del ticket.
+	 * Útil para guardar desde Configuración sin depender de company/branch.
+	 * @returns { ok: true } o { ok: false, error: string }
+	 */
+	updateTicketPrintSettings: async (
+		ticketFontSizePt: number,
+		ticketMarginLeft: number,
+		ticketMarginRight: number
+	): Promise<{ ok: true } | { ok: false; error: string }> => {
+		const current = get(state);
+		if (!current.id) {
+			return { ok: false, error: 'No hay configuración del negocio cargada. Entrá a Datos del negocio y guardá nombre y sucursal primero.' };
+		}
+		const payload = {
+			ticket_font_size_pt: ticketFontSizePt,
+			ticket_margin_left: ticketMarginLeft,
+			ticket_margin_right: ticketMarginRight
+		};
+		const { data, error } = await supabase
+			.from('business_settings')
+			.update(payload)
+			.eq('id', current.id)
+			.select('id')
+			.maybeSingle();
+		if (error) {
+			return { ok: false, error: error.message || 'Error al guardar en la base de datos' };
+		}
+		if (!data) {
+			return { ok: false, error: 'No se actualizó ninguna fila (¿tenés permisos?)' };
+		}
+		state.update((s) => ({
+			...s,
+			ticketFontSizePt,
+			ticketMarginLeft,
+			ticketMarginRight
+		}));
+		writeFallback({
+			...readFallback(),
+			ticketFontSizePt,
+			ticketMarginLeft,
+			ticketMarginRight
+		});
+		return { ok: true };
 	},
 	uploadLogo: async (file: File, currentLogoUrl?: string | null) => {
 		if (!file) return { ok: false as const, message: 'Archivo inválido' };
@@ -268,7 +316,8 @@ export const businessStore = {
 			ticketMarginRight: current.ticketMarginRight
 		});
 	},
-	/** Valores por defecto para impresión de ticket (usados si no hay config en DB). */
+	/** Valores por defecto para impresión de ticket (como el software VB que imprime bien). */
 	DEFAULT_TICKET_FONT_PT,
-	DEFAULT_TICKET_MARGIN
+	DEFAULT_TICKET_MARGIN_LEFT,
+	DEFAULT_TICKET_MARGIN_RIGHT
 };

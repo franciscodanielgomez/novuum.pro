@@ -23,10 +23,10 @@
 	let savingShipping = $state(false);
 	let savingMethod = $state(false);
 
-	// Impresión de ticket (tamaño y márgenes, guardados en business_settings)
+	// Impresión de ticket (tamaño y márgenes, guardados en business_settings; defaults como VB: 5, 40)
 	let ticketFontSizeInput = $state('30');
-	let ticketMarginLeftInput = $state('20');
-	let ticketMarginRightInput = $state('20');
+	let ticketMarginLeftInput = $state('5');
+	let ticketMarginRightInput = $state('40');
 	let savingTicketPrint = $state(false);
 
 	// Impresión (Tauri + fallback web)
@@ -111,7 +111,7 @@
 	}
 
 	async function saveShippingPrice() {
-		const num = Number(shippingPriceInput.replace(',', '.'));
+		const num = Number(String(shippingPriceInput).replace(',', '.'));
 		if (Number.isNaN(num) || num < 0) {
 			toastsStore.error('Ingresá un precio válido (número mayor o igual a 0).');
 			return;
@@ -161,9 +161,9 @@
 	}
 
 	async function saveTicketPrintSettings() {
-		const fontPt = Math.round(Number(ticketFontSizeInput.replace(',', '.')));
-		const marginL = Math.round(Number(ticketMarginLeftInput.replace(',', '.')));
-		const marginR = Math.round(Number(ticketMarginRightInput.replace(',', '.')));
+		const fontPt = Math.round(Number(String(ticketFontSizeInput).replace(',', '.')));
+		const marginL = Math.round(Number(String(ticketMarginLeftInput).replace(',', '.')));
+		const marginR = Math.round(Number(String(ticketMarginRightInput).replace(',', '.')));
 		if (Number.isNaN(fontPt) || fontPt < 9 || fontPt > 40) {
 			toastsStore.error('Tamaño de letra debe estar entre 9 y 40 pt');
 			return;
@@ -173,38 +173,34 @@
 			return;
 		}
 		savingTicketPrint = true;
-		const ok = await businessStore.updateSettings({
-			companyName: $businessStore.companyName,
-			branchName: $businessStore.branchName,
-			logoUrl: $businessStore.logoUrl,
-			shippingPrice: $businessStore.shippingPrice,
-			phone: $businessStore.phone,
-			ticketFontSizePt: fontPt,
-			ticketMarginLeft: marginL,
-			ticketMarginRight: marginR
-		});
+		const result = await businessStore.updateTicketPrintSettings(fontPt, marginL, marginR);
 		savingTicketPrint = false;
-		if (ok) {
+		if (result.ok) {
 			toastsStore.success('Configuración de impresión del ticket guardada');
 			ticketFontSizeInput = String(fontPt);
 			ticketMarginLeftInput = String(marginL);
 			ticketMarginRightInput = String(marginR);
 		} else {
-			toastsStore.error('No se pudo guardar');
+			toastsStore.error(result.error);
 		}
 	}
 
 	onMount(async () => {
-		await businessStore.load();
-		shippingPriceInput = String($businessStore.shippingPrice);
-		ticketFontSizeInput = String($businessStore.ticketFontSizePt ?? 30);
-		ticketMarginLeftInput = String($businessStore.ticketMarginLeft ?? 20);
-		ticketMarginRightInput = String($businessStore.ticketMarginRight ?? 20);
-		await loadPaymentMethods();
-		const saved = getSavedPrinterName() ?? '';
-		selectedPrinter = saved;
-		savedPrinterDisplay = saved;
-		loading = false;
+		try {
+			await businessStore.load();
+			shippingPriceInput = String($businessStore.shippingPrice);
+			ticketFontSizeInput = String($businessStore.ticketFontSizePt ?? 30);
+			ticketMarginLeftInput = String($businessStore.ticketMarginLeft ?? 5);
+			ticketMarginRightInput = String($businessStore.ticketMarginRight ?? 40);
+			await loadPaymentMethods();
+			const saved = getSavedPrinterName() ?? '';
+			selectedPrinter = saved;
+			savedPrinterDisplay = saved;
+		} catch (e) {
+			toastsStore.error('Error al cargar configuraciones. Revisá la conexión.');
+		} finally {
+			loading = false;
+		}
 	});
 </script>
 

@@ -72,8 +72,8 @@ export async function printTicket(text: string, printerName?: string): Promise<v
 				printerName: name || null,
 				useCrlf: true,
 				fontSizePt: settings.ticketFontSizePt ?? 30,
-				marginLeft: settings.ticketMarginLeft ?? 20,
-				marginRight: settings.ticketMarginRight ?? 20
+				marginLeft: settings.ticketMarginLeft ?? 5,
+				marginRight: settings.ticketMarginRight ?? 40
 			}
 		});
 		return;

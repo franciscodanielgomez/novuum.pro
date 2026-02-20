@@ -99,6 +99,12 @@ export const sessionStore = {
 			// Sin conexión con la API
 		}
 		try {
+			// Forzar refresh del token para no quedarse colgado cuando la sesión expira tras minutos inactivo
+			await supabase.auth.refreshSession();
+		} catch {
+			// Offline o refresh fallido; getSession() seguirá con lo que haya en memoria
+		}
+		try {
 			const { data } = await supabase.auth.getSession();
 			user = data?.session?.user ?? null;
 		} catch {
