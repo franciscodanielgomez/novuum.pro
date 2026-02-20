@@ -91,9 +91,13 @@
 	// Lista plana para cuando el menú está colapsado (solo iconos)
 	const items = navGroups.flatMap((g) => g.items);
 
+	const LAYOUT_LOAD_TIMEOUT_MS = 10_000;
 	onMount(() => {
 		void (async () => {
-			await Promise.all([sessionStore.hydrate(), businessStore.load()]);
+			await Promise.race([
+				Promise.all([sessionStore.hydrate(), businessStore.load()]),
+				new Promise<void>((r) => setTimeout(r, LAYOUT_LOAD_TIMEOUT_MS))
+			]);
 			if (!$sessionStore.user) {
 				await goto('/login');
 			}

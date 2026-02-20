@@ -29,12 +29,13 @@
 		{ id: 'active', header: 'Estado', accessorFn: (r) => (r.active ? 'Activa' : 'Inactiva') }
 	];
 
+	const LOAD_CATEGORIES_TIMEOUT_MS = 8_000;
 	const loadCategories = async () => {
 		loading = true;
 		const timeoutId = setTimeout(() => {
 			loading = false;
 			toastsStore.error('La carga de categorías tardó demasiado. Revisá la conexión o volvé a iniciar sesión.');
-		}, 12_000);
+		}, LOAD_CATEGORIES_TIMEOUT_MS);
 		try {
 			const { data, error } = await supabase
 				.from('categories')

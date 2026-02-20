@@ -51,12 +51,13 @@
 
 	const selectedGroup = $derived(editingId ? groups.find((g) => g.id === editingId) ?? null : null);
 
+	const LOAD_GROUPS_TIMEOUT_MS = 8_000;
 	const loadGroups = async () => {
 		loading = true;
 		const timeoutId = setTimeout(() => {
 			loading = false;
 			toastsStore.error('La carga de grupos tardó demasiado. Revisá la conexión.');
-		}, 12_000);
+		}, LOAD_GROUPS_TIMEOUT_MS);
 		try {
 			const { data, error } = await supabase
 				.from('product_groups')

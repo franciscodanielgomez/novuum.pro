@@ -7,8 +7,26 @@ import { derived, writable } from 'svelte/store';
 import type { User } from '@supabase/supabase-js';
 
 const SESSION_KEY = 'grido_v0_session';
-/** Marca que el usuario cerró sesión; evita que hydrate() restaure la sesión al volver atrás o al entrar por link */
+/** Marca que el usuario cerró sesión (sessionStorage no persiste al refrescar en algunos entornos) */
 const LOGOUT_FLAG_KEY = 'novum_logout';
+/** Timestamp de cierre de sesión en localStorage; persiste al refrescar para no restaurar sesión */
+const LOGOUT_TS_KEY = 'novum_logout_ts';
+const LOGOUT_TS_VALID_MS = 60_000;
+
+/** Borrar sesión de Supabase en localStorage para que getSession() devuelva null tras logout */
+const clearSupabaseAuthStorage = () => {
+	if (typeof localStorage === 'undefined') return;
+	try {
+		const keys: string[] = [];
+		for (let i = 0; i < localStorage.length; i++) {
+			const k = localStorage.key(i);
+			if (k?.startsWith('sb-')) keys.push(k);
+		}
+		keys.forEach((k) => localStorage.removeItem(k));
+	} catch {
+		// ignore
+	}
+};
 
 type SessionState = {
 	user: AppUser | null;
@@ -34,6 +52,19 @@ const mapLegacyRole = (role: string | null | undefined): AppUser['role'] => {
 	if (role === 'GESTOR') return 'GESTOR';
 	if (role === 'ADMINISTRADOR') return 'ADMINISTRADOR';
 	return 'CAJERO';
+};
+
+/** Usuario mínimo desde auth, sin consultar team_members/user_profiles (para no bloquear el login). */
+const minimalUserFromAuth = (user: User | null): AppUser | null => {
+	if (!user?.id || !user.email) return null;
+	const name = ((user.user_metadata?.name as string | undefined) ?? '').trim() || user.email;
+	return {
+		id: user.id,
+		email: user.email,
+		name,
+		role: 'CAJERO',
+		avatarUrl: undefined
+	};
 };
 
 const mapUser = async (user: User | null): Promise<AppUser | null> => {
@@ -84,7 +115,18 @@ export const sessionStore = {
 	subscribe: state.subscribe,
 	hydrate: async () => {
 		if (!browser) return;
-		// Si cerró sesión, no restaurar usuario desde Supabase (evita entrar por link o atrás)
+		// Si cerró sesión hace poco, no restaurar (sessionStorage se pierde al refrescar en Tauri/web)
+		const logoutTs = typeof localStorage !== 'undefined' ? localStorage.getItem(LOGOUT_TS_KEY) : null;
+		if (logoutTs) {
+			const ts = parseInt(logoutTs, 10);
+			if (!Number.isNaN(ts) && Date.now() - ts < LOGOUT_TS_VALID_MS) {
+				localStorage.removeItem(LOGOUT_TS_KEY);
+				if (typeof sessionStorage !== 'undefined') sessionStorage.removeItem(LOGOUT_FLAG_KEY);
+				state.set({ ...initial, ready: true });
+				return;
+			}
+			localStorage.removeItem(LOGOUT_TS_KEY);
+		}
 		if (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(LOGOUT_FLAG_KEY) === '1') {
 			sessionStorage.removeItem(LOGOUT_FLAG_KEY);
 			state.set({ ...initial, ready: true });
@@ -104,45 +146,56 @@ export const sessionStore = {
 					localLocation = 'Ituzaingó';
 				}
 			}
-			let shift: Shift | null = null;
-			let user: User | null = null;
 			try {
-				shift = await api.shifts.getOpen();
-			} catch {
-				// Sin conexión con la API
-			}
-			try {
-				// Forzar refresh del token para no quedarse colgado cuando la sesión expira tras minutos inactivo
 				await supabase.auth.refreshSession();
 			} catch {
-				// Offline o refresh fallido; getSession() seguirá con lo que haya en memoria
+				// Offline o refresh fallido
 			}
+			let user: User | null = null;
 			try {
 				const { data } = await supabase.auth.getSession();
 				user = data?.session?.user ?? null;
 			} catch {
 				// Supabase auth no disponible
 			}
-			let mappedUser: AppUser | null = null;
-			try {
-				mappedUser = await mapUser(user);
-			} catch {
-				// Perfil no cargó; usar datos básicos del auth si hay user
-				if (user?.id && user?.email) {
-					mappedUser = {
-						id: user.id,
-						email: user.email,
-						name: (user.user_metadata?.name as string)?.trim() || user.email,
-						role: 'CAJERO'
-					};
-				}
-			}
+			// Mostrar app enseguida con usuario mínimo; si no, con ready:true y user:null redirige a login
+			const minimal = minimalUserFromAuth(user);
 			state.set({
-				user: mappedUser,
+				user: minimal,
 				location: localLocation,
-				shift,
+				shift: null,
 				ready: true
 			});
+			if (!user) return;
+
+			// Completar perfil y turno en segundo plano para no bloquear ni el layout ni la carga de datos
+			void (async () => {
+				let shift: Shift | null = null;
+				try {
+					shift = await api.shifts.getOpen();
+				} catch {
+					// Sin conexión con la API
+				}
+				let mappedUser: AppUser | null = minimal;
+				try {
+					mappedUser = await mapUser(user);
+				} catch {
+					if (user?.id && user?.email) {
+						mappedUser = {
+							id: user.id,
+							email: user.email,
+							name: ((user.user_metadata?.name as string)?.trim() || user.email) ?? 'Usuario',
+							role: 'CAJERO'
+						};
+					}
+				}
+				state.set({
+					user: mappedUser,
+					location: localLocation,
+					shift,
+					ready: true
+				});
+			})();
 		} finally {
 			clearTimeout(readyTimeoutId);
 		}
@@ -182,13 +235,14 @@ export const sessionStore = {
 				return { ok: false, message: error?.message ?? 'No se pudo iniciar sesión' };
 			}
 			if (typeof sessionStorage !== 'undefined') sessionStorage.removeItem(LOGOUT_FLAG_KEY);
+			if (typeof localStorage !== 'undefined') localStorage.removeItem(LOGOUT_TS_KEY);
 			saveSession({ location: 'Ituzaingó' });
-			const shift = await api.shifts.getOpen();
-			const mappedUser = await mapUser(data.user);
+			// No esperar getOpen ni mapUser: pueden colgar y dejan el login en "cargando". El layout hará hydrate() al cargar /app.
+			const minimal = minimalUserFromAuth(data.user);
 			state.set({
-				user: mappedUser,
+				user: minimal,
 				location: 'Ituzaingó',
-				shift,
+				shift: null,
 				ready: true
 			});
 			return { ok: true as const };
@@ -207,15 +261,15 @@ export const sessionStore = {
 		if (error) {
 			return { ok: false, message: error.message };
 		}
-
+		if (typeof sessionStorage !== 'undefined') sessionStorage.removeItem(LOGOUT_FLAG_KEY);
+		if (typeof localStorage !== 'undefined') localStorage.removeItem(LOGOUT_TS_KEY);
 		saveSession({ location: 'Ituzaingó' });
 		if (data.session?.user) {
-			const shift = await api.shifts.getOpen();
-			const mappedUser = await mapUser(data.session.user);
+			const minimal = minimalUserFromAuth(data.session.user);
 			state.set({
-				user: mappedUser,
+				user: minimal,
 				location: 'Ituzaingó',
-				shift,
+				shift: null,
 				ready: true
 			});
 			return { ok: true as const, needsEmailConfirmation: false };
@@ -225,11 +279,16 @@ export const sessionStore = {
 	},
 	logout: async () => {
 		if (typeof sessionStorage !== 'undefined') sessionStorage.setItem(LOGOUT_FLAG_KEY, '1');
+		if (typeof localStorage !== 'undefined') localStorage.setItem(LOGOUT_TS_KEY, String(Date.now()));
 		saveSession(null);
 		state.set({ ...initial, ready: true });
+		// Limpiar sesión de Supabase (esperar hasta 3s; si cuelga, borrar storage igual)
+		await Promise.race([
+			supabase.auth.signOut(),
+			new Promise<void>((r) => setTimeout(r, 3_000))
+		]).catch(() => {});
+		clearSupabaseAuthStorage();
 		await goto('/login', { replaceState: true });
-		// En Tauri la llamada a signOut a veces cuelga; no bloquear la salida
-		supabase.auth.signOut().catch(() => {});
 	},
 	setShift(shift: Shift | null) {
 		state.update((s) => ({ ...s, shift }));
