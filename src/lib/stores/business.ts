@@ -2,12 +2,18 @@ import { supabase } from '$lib/supabase/client';
 import { removeStorageFileIfOurs } from '$lib/supabase/storage-helpers';
 import { get, writable } from 'svelte/store';
 
+const DEFAULT_TICKET_FONT_PT = 30;
+const DEFAULT_TICKET_MARGIN = 20;
+
 type BusinessSettings = {
 	companyName: string;
 	branchName: string;
 	logoUrl: string | null;
 	shippingPrice: number;
 	phone: string | null;
+	ticketFontSizePt: number;
+	ticketMarginLeft: number;
+	ticketMarginRight: number;
 };
 
 type BusinessState = {
@@ -17,6 +23,9 @@ type BusinessState = {
 	logoUrl: string | null;
 	shippingPrice: number;
 	phone: string | null;
+	ticketFontSizePt: number;
+	ticketMarginLeft: number;
+	ticketMarginRight: number;
 	loading: boolean;
 };
 
@@ -25,7 +34,10 @@ const DEFAULT_SETTINGS: BusinessSettings = {
 	branchName: 'Ituzaingó',
 	logoUrl: null,
 	shippingPrice: 0,
-	phone: null
+	phone: null,
+	ticketFontSizePt: DEFAULT_TICKET_FONT_PT,
+	ticketMarginLeft: DEFAULT_TICKET_MARGIN,
+	ticketMarginRight: DEFAULT_TICKET_MARGIN
 };
 
 const state = writable<BusinessState>({
@@ -35,6 +47,9 @@ const state = writable<BusinessState>({
 	logoUrl: DEFAULT_SETTINGS.logoUrl,
 	shippingPrice: DEFAULT_SETTINGS.shippingPrice,
 	phone: DEFAULT_SETTINGS.phone,
+	ticketFontSizePt: DEFAULT_SETTINGS.ticketFontSizePt,
+	ticketMarginLeft: DEFAULT_SETTINGS.ticketMarginLeft,
+	ticketMarginRight: DEFAULT_SETTINGS.ticketMarginRight,
 	loading: false
 });
 
@@ -48,12 +63,17 @@ const readFallback = (): BusinessSettings => {
 	if (!raw) return DEFAULT_SETTINGS;
 	try {
 		const parsed = JSON.parse(raw) as Partial<BusinessSettings>;
+		const num = (v: unknown, def: number) =>
+			typeof v === 'number' && !Number.isNaN(v) ? v : def;
 		return {
 			companyName: parsed.companyName?.trim() || DEFAULT_SETTINGS.companyName,
 			branchName: parsed.branchName?.trim() || DEFAULT_SETTINGS.branchName,
 			logoUrl: parsed.logoUrl?.trim() || null,
-			shippingPrice: typeof parsed.shippingPrice === 'number' ? parsed.shippingPrice : DEFAULT_SETTINGS.shippingPrice,
-			phone: typeof parsed.phone === 'string' ? (parsed.phone.trim() || null) : DEFAULT_SETTINGS.phone
+			shippingPrice: num(parsed.shippingPrice, DEFAULT_SETTINGS.shippingPrice),
+			phone: typeof parsed.phone === 'string' ? (parsed.phone.trim() || null) : DEFAULT_SETTINGS.phone,
+			ticketFontSizePt: num(parsed.ticketFontSizePt, DEFAULT_TICKET_FONT_PT),
+			ticketMarginLeft: num(parsed.ticketMarginLeft, DEFAULT_TICKET_MARGIN),
+			ticketMarginRight: num(parsed.ticketMarginRight, DEFAULT_TICKET_MARGIN)
 		};
 	} catch {
 		return DEFAULT_SETTINGS;
@@ -72,18 +92,23 @@ export const businessStore = {
 		try {
 			const { data, error } = await supabase
 				.from('business_settings')
-				.select('id, company_name, branch_name, logo_url, shipping_price, phone')
+				.select('id, company_name, branch_name, logo_url, shipping_price, phone, ticket_font_size_pt, ticket_margin_left, ticket_margin_right')
 				.order('created_at', { ascending: true })
 				.limit(1)
 				.maybeSingle();
 
 			if (!error && data) {
+				const num = (v: unknown, def: number) =>
+					typeof v === 'number' && !Number.isNaN(v) ? v : def;
 				const next: BusinessSettings = {
 					companyName: data.company_name?.trim() || DEFAULT_SETTINGS.companyName,
 					branchName: data.branch_name?.trim() || DEFAULT_SETTINGS.branchName,
 					logoUrl: data.logo_url?.trim() || null,
-					shippingPrice: typeof data.shipping_price === 'number' ? Number(data.shipping_price) : DEFAULT_SETTINGS.shippingPrice,
-					phone: data.phone?.trim() || null
+					shippingPrice: num(data.shipping_price, DEFAULT_SETTINGS.shippingPrice),
+					phone: data.phone?.trim() || null,
+					ticketFontSizePt: num(data.ticket_font_size_pt, DEFAULT_TICKET_FONT_PT),
+					ticketMarginLeft: num(data.ticket_margin_left, DEFAULT_TICKET_MARGIN),
+					ticketMarginRight: num(data.ticket_margin_right, DEFAULT_TICKET_MARGIN)
 				};
 				writeFallback(next);
 				state.set({ id: data.id, ...next, loading: false });
@@ -100,6 +125,10 @@ export const businessStore = {
 		const logoUrl = settings.logoUrl?.trim() || null;
 		const shippingPrice = typeof settings.shippingPrice === 'number' ? settings.shippingPrice : 0;
 		const phone = settings.phone?.trim() || null;
+		const num = (v: unknown, def: number) => (typeof v === 'number' && !Number.isNaN(v) ? v : def);
+		const ticketFontSizePt = num(settings.ticketFontSizePt, DEFAULT_TICKET_FONT_PT);
+		const ticketMarginLeft = num(settings.ticketMarginLeft, DEFAULT_TICKET_MARGIN);
+		const ticketMarginRight = num(settings.ticketMarginRight, DEFAULT_TICKET_MARGIN);
 		if (!companyName || !branchName) return false;
 		const current = get(state);
 		const payload = {
@@ -107,13 +136,25 @@ export const businessStore = {
 			branch_name: branchName,
 			logo_url: logoUrl,
 			shipping_price: shippingPrice,
-			phone
+			phone,
+			ticket_font_size_pt: ticketFontSizePt,
+			ticket_margin_left: ticketMarginLeft,
+			ticket_margin_right: ticketMarginRight
 		};
 
 		if (current.id) {
 			const { error } = await supabase.from('business_settings').update(payload).eq('id', current.id);
 			if (!error) {
-				const next = { companyName, branchName, logoUrl, shippingPrice, phone };
+				const next = {
+					companyName,
+					branchName,
+					logoUrl,
+					shippingPrice,
+					phone,
+					ticketFontSizePt,
+					ticketMarginLeft,
+					ticketMarginRight
+				};
 				writeFallback(next);
 				state.update((s) => ({ ...s, ...next }));
 				return true;
@@ -123,7 +164,7 @@ export const businessStore = {
 		const { data, error } = await supabase
 			.from('business_settings')
 			.insert(payload)
-			.select('id, company_name, branch_name, logo_url, shipping_price, phone')
+			.select('id, company_name, branch_name, logo_url, shipping_price, phone, ticket_font_size_pt, ticket_margin_left, ticket_margin_right')
 			.single();
 
 		if (!error && data) {
@@ -131,15 +172,27 @@ export const businessStore = {
 				companyName: data.company_name?.trim() || companyName,
 				branchName: data.branch_name?.trim() || branchName,
 				logoUrl: data.logo_url?.trim() || logoUrl,
-				shippingPrice: typeof data.shipping_price === 'number' ? Number(data.shipping_price) : shippingPrice,
-				phone: data.phone?.trim() || null
+				shippingPrice: num(data.shipping_price, shippingPrice),
+				phone: data.phone?.trim() || null,
+				ticketFontSizePt: num(data.ticket_font_size_pt, DEFAULT_TICKET_FONT_PT),
+				ticketMarginLeft: num(data.ticket_margin_left, DEFAULT_TICKET_MARGIN),
+				ticketMarginRight: num(data.ticket_margin_right, DEFAULT_TICKET_MARGIN)
 			};
 			writeFallback(next);
 			state.set({ id: data.id, ...next, loading: false });
 			return true;
 		}
 
-		const fallbackNext = { companyName, branchName, logoUrl, shippingPrice, phone };
+		const fallbackNext = {
+			companyName,
+			branchName,
+			logoUrl,
+			shippingPrice,
+			phone,
+			ticketFontSizePt,
+			ticketMarginLeft,
+			ticketMarginRight
+		};
 		writeFallback(fallbackNext);
 		state.update((s) => ({ ...s, ...fallbackNext }));
 		return true;
@@ -209,7 +262,13 @@ export const businessStore = {
 			branchName: name,
 			logoUrl: current.logoUrl,
 			shippingPrice: current.shippingPrice,
-			phone: current.phone
+			phone: current.phone,
+			ticketFontSizePt: current.ticketFontSizePt,
+			ticketMarginLeft: current.ticketMarginLeft,
+			ticketMarginRight: current.ticketMarginRight
 		});
-	}
+	},
+	/** Valores por defecto para impresión de ticket (usados si no hay config en DB). */
+	DEFAULT_TICKET_FONT_PT,
+	DEFAULT_TICKET_MARGIN
 };

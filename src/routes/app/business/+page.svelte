@@ -259,7 +259,10 @@
 			branchName,
 			logoUrl: nextLogoUrl,
 			shippingPrice: $businessStore.shippingPrice,
-			phone: joinPhone(phoneCountryIso, phoneNumber)
+			phone: joinPhone(phoneCountryIso, phoneNumber),
+			ticketFontSizePt: $businessStore.ticketFontSizePt,
+			ticketMarginLeft: $businessStore.ticketMarginLeft,
+			ticketMarginRight: $businessStore.ticketMarginRight
 		});
 		if (!ok) {
 			toastsStore.error('No se pudo guardar la configuracion del negocio');

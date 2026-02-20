@@ -23,6 +23,12 @@
 	let savingShipping = $state(false);
 	let savingMethod = $state(false);
 
+	// Impresión de ticket (tamaño y márgenes, guardados en business_settings)
+	let ticketFontSizeInput = $state('30');
+	let ticketMarginLeftInput = $state('20');
+	let ticketMarginRightInput = $state('20');
+	let savingTicketPrint = $state(false);
+
 	// Impresión (Tauri + fallback web)
 	let printers = $state<string[]>([]);
 	let selectedPrinter = $state<string>('');
@@ -154,9 +160,46 @@
 		}
 	}
 
+	async function saveTicketPrintSettings() {
+		const fontPt = Math.round(Number(ticketFontSizeInput.replace(',', '.')));
+		const marginL = Math.round(Number(ticketMarginLeftInput.replace(',', '.')));
+		const marginR = Math.round(Number(ticketMarginRightInput.replace(',', '.')));
+		if (Number.isNaN(fontPt) || fontPt < 9 || fontPt > 40) {
+			toastsStore.error('Tamaño de letra debe estar entre 9 y 40 pt');
+			return;
+		}
+		if (Number.isNaN(marginL) || marginL < 0 || marginL > 100 || Number.isNaN(marginR) || marginR < 0 || marginR > 100) {
+			toastsStore.error('Márgenes deben estar entre 0 y 100');
+			return;
+		}
+		savingTicketPrint = true;
+		const ok = await businessStore.updateSettings({
+			companyName: $businessStore.companyName,
+			branchName: $businessStore.branchName,
+			logoUrl: $businessStore.logoUrl,
+			shippingPrice: $businessStore.shippingPrice,
+			phone: $businessStore.phone,
+			ticketFontSizePt: fontPt,
+			ticketMarginLeft: marginL,
+			ticketMarginRight: marginR
+		});
+		savingTicketPrint = false;
+		if (ok) {
+			toastsStore.success('Configuración de impresión del ticket guardada');
+			ticketFontSizeInput = String(fontPt);
+			ticketMarginLeftInput = String(marginL);
+			ticketMarginRightInput = String(marginR);
+		} else {
+			toastsStore.error('No se pudo guardar');
+		}
+	}
+
 	onMount(async () => {
 		await businessStore.load();
 		shippingPriceInput = String($businessStore.shippingPrice);
+		ticketFontSizeInput = String($businessStore.ticketFontSizePt ?? 30);
+		ticketMarginLeftInput = String($businessStore.ticketMarginLeft ?? 20);
+		ticketMarginRightInput = String($businessStore.ticketMarginRight ?? 20);
 		await loadPaymentMethods();
 		const saved = getSavedPrinterName() ?? '';
 		selectedPrinter = saved;
@@ -231,6 +274,54 @@
 					>
 						{printingTest ? 'Imprimiendo…' : 'Imprimir prueba A4'}
 					</button>
+				</div>
+
+				<!-- Impresión de ticket: tamaño y márgenes (guardados en DB) -->
+				<div class="mt-6 border-t border-slate-200 pt-4 dark:border-neutral-700">
+					<h3 class="text-sm font-medium text-slate-700 dark:text-slate-300">Impresión de ticket</h3>
+					<p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+						Tamaño de letra y márgenes del ticket (solo aplican en app desktop con impresora térmica).
+					</p>
+					<div class="mt-3 flex flex-wrap items-end gap-3">
+						<label class="flex flex-col gap-1">
+							<span class="text-xs font-medium text-slate-600 dark:text-slate-300">Tamaño de letra (pt)</span>
+							<input
+								type="number"
+								min="9"
+								max="40"
+								class="input w-24"
+								bind:value={ticketFontSizeInput}
+							/>
+						</label>
+						<label class="flex flex-col gap-1">
+							<span class="text-xs font-medium text-slate-600 dark:text-slate-300">Margen izquierdo</span>
+							<input
+								type="number"
+								min="0"
+								max="100"
+								class="input w-24"
+								bind:value={ticketMarginLeftInput}
+							/>
+						</label>
+						<label class="flex flex-col gap-1">
+							<span class="text-xs font-medium text-slate-600 dark:text-slate-300">Margen derecho</span>
+							<input
+								type="number"
+								min="0"
+								max="100"
+								class="input w-24"
+								bind:value={ticketMarginRightInput}
+							/>
+						</label>
+						<button
+							type="button"
+							class="btn-primary"
+							disabled={savingTicketPrint}
+							onclick={saveTicketPrintSettings}
+						>
+							{savingTicketPrint ? 'Guardando…' : 'Guardar'}
+						</button>
+					</div>
 				</div>
 			</section>
 

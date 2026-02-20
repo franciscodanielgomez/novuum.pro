@@ -95,10 +95,21 @@ fn print_ticket_file_windows(_text: &str, _printer_name: Option<&str>) -> Result
     Err("Impresión solo soportada en Windows".to_string())
 }
 
+// HORZRES = 8 (ancho del área imprimible en píxeles)
+#[cfg(windows)]
+const HORZRES: i32 = 8;
+
 // --- Impresión por GDI (dibujo línea a línea, sin ventanas ni diálogos) ---
 #[cfg(windows)]
-fn print_ticket_gdi_windows(text: &str, printer_name: &str) -> Result<(), String> {
+fn print_ticket_gdi_windows(
+    text: &str,
+    printer_name: &str,
+    font_size_pt: i32,
+    margin_left: i32,
+    margin_right: i32,
+) -> Result<(), String> {
     use std::iter;
+    use winapi::shared::windef::SIZE;
     use winapi::um::wingdi::*;
 
     fn str_to_wide(s: &str) -> Vec<u16> {
@@ -153,9 +164,12 @@ fn print_ticket_gdi_windows(text: &str, printer_name: &str) -> Result<(), String
             ));
         }
 
+        let page_width_px = GetDeviceCaps(hdc, HORZRES);
+        let printable_width = page_width_px - margin_left - margin_right;
+
         let pitch_and_family = (FF_MODERN as u32) | (FIXED_PITCH as u32);
         let font = CreateFontW(
-            -30,
+            -font_size_pt,
             0,
             0,
             0,
@@ -184,16 +198,53 @@ fn print_ticket_gdi_windows(text: &str, printer_name: &str) -> Result<(), String
         } else {
             150i32
         };
-        let margin_x = 20i32;
         let mut y = 100i32;
 
         for line in lines {
-            let line_wide = str_to_wide(line);
-            if line_wide.len() > 1 {
-                let slice = &line_wide[..(line_wide.len() - 1)];
-                TextOutW(hdc, margin_x, y, slice.as_ptr(), slice.len() as i32);
+            let mut start = 0;
+            let line_bytes = line.as_bytes();
+            while start < line.len() {
+                let mut end = start;
+                for (i, _) in line[start..].char_indices() {
+                    let byte_end = start + i;
+                    if byte_end == start {
+                        continue;
+                    }
+                    let chunk = &line[start..byte_end];
+                    let wide = str_to_wide(chunk);
+                    let len_u16 = (wide.len() - 1) as i32;
+                    if len_u16 <= 0 {
+                        continue;
+                    }
+                    let mut size = SIZE { cx: 0, cy: 0 };
+                    if GetTextExtentPoint32W(hdc, wide.as_ptr(), len_u16, &mut size) == 0 {
+                        break;
+                    }
+                    if size.cx > printable_width {
+                        break;
+                    }
+                    end = byte_end;
+                }
+                if end == start {
+                    end = start
+                        + line[start..]
+                            .chars()
+                            .next()
+                            .map(|c| c.len_utf8())
+                            .unwrap_or(0)
+                        .min(line.len() - start);
+                }
+                if end > start {
+                    let slice_str = &line[start..end];
+                    let line_wide = str_to_wide(slice_str);
+                    if line_wide.len() > 1 {
+                        let slice = &line_wide[..(line_wide.len() - 1)];
+                        TextOutW(hdc, margin_left, y, slice.as_ptr(), slice.len() as i32);
+                    }
+                }
+                y += line_height;
+                start = end;
             }
-            y += line_height;
         }
 
         if !old_font.is_null() {
@@ -224,7 +275,13 @@ fn print_ticket_gdi_windows(text: &str, printer_name: &str) -> Result<(), String
 }
 
 #[cfg(not(windows))]
-fn print_ticket_gdi_windows(_text: &str, _printer_name: &str) -> Result<(), String> {
+fn print_ticket_gdi_windows(
+    _text: &str,
+    _printer_name: &str,
+    _font_size_pt: i32,
+    _margin_left: i32,
+    _margin_right: i32,
+) -> Result<(), String> {
     Err("Impresión solo soportada en Windows".to_string())
 }
 
@@ -235,7 +292,13 @@ fn print_ticket(payload: PrintTicketPayload) -> Result<(), String> {
         .filter(|s| !s.is_empty())
         .ok_or("No printer configured")?;
     #[cfg(windows)]
-    return print_ticket_gdi_windows(payload.text.as_str(), printer_name.as_str());
+    return print_ticket_gdi_windows(
+        payload.text.as_str(),
+        printer_name.as_str(),
+        payload.font_size_pt.unwrap_or(30),
+        payload.margin_left.unwrap_or(20),
+        payload.margin_right.unwrap_or(20),
+    );
     #[cfg(not(windows))]
     {
         let _ = printer_name;
@@ -261,6 +324,12 @@ struct PrintTicketPayload {
     #[serde(rename = "useCrlf")]
     #[allow(dead_code)]
     use_crlf: Option<bool>,
+    #[serde(rename = "fontSizePt")]
+    font_size_pt: Option<i32>,
+    #[serde(rename = "marginLeft")]
+    margin_left: Option<i32>,
+    #[serde(rename = "marginRight")]
+    margin_right: Option<i32>,
 }
 
 #[derive(serde::Serialize)]

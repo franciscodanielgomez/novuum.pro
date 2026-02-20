@@ -4,6 +4,8 @@
  */
 
 import { browser } from '$app/environment';
+import { get } from 'svelte/store';
+import { businessStore } from '$lib/stores/business';
 
 const PRINT_STORAGE_KEY = 'novum_print_ticket_text';
 const PRINTER_STORAGE_KEY = 'novum_printer_name';
@@ -63,8 +65,16 @@ export async function printTicket(text: string, printerName?: string): Promise<v
 	const invoke = await getTauriInvoke();
 	if (invoke) {
 		const name = printerName ?? getSavedPrinterName() ?? undefined;
+		const settings = get(businessStore);
 		await invoke('print_ticket', {
-			payload: { text, printerName: name || null, useCrlf: true }
+			payload: {
+				text,
+				printerName: name || null,
+				useCrlf: true,
+				fontSizePt: settings.ticketFontSizePt ?? 30,
+				marginLeft: settings.ticketMarginLeft ?? 20,
+				marginRight: settings.ticketMarginRight ?? 20
+			}
 		});
 		return;
 	}
