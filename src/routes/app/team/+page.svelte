@@ -9,12 +9,16 @@
 	import { toastsStore } from '$lib/stores/toasts';
 	import type { Staff, StaffRole } from '$lib/types';
 	import { onMount } from 'svelte';
+	import { clearPosSelfHealMark, tryPosSelfHealReload } from '$lib/pos/self-heal';
 
 	type TeamRow = Staff & { isGuest: boolean };
 
 	let drawerOpen = $state(false);
 	let addGuestDrawerOpen = $state(false);
 	let loading = $state(true);
+	let loadStartedAt = $state(0);
+	const TEAM_STUCK_RELOAD_MS = 20_000;
+	const TEAM_SELFHEAL_SCREEN_KEY = 'team';
 	let editing = $state<TeamRow | null>(null);
 	let form = $state<{ name: string; email: string; phone: string; roles: StaffRole[]; active: boolean }>({
 		name: '',
@@ -127,7 +131,7 @@
 			}
 			toastsStore.success('Equipo actualizado');
 			if (isEditingSelf) {
-				await sessionStore.hydrate();
+				sessionStore.updateUserProfile({ name: form.name.trim() || undefined });
 			}
 		} catch (e) {
 			toastsStore.error(e instanceof Error ? e.message : 'No se pudo guardar. ¿Ejecutaste la migración en Supabase?');
@@ -149,7 +153,6 @@
 		}
 		try {
 			await staffStore.update(myRow.id, { role: 'ADMINISTRADOR' });
-			await sessionStore.hydrate();
 			toastsStore.success('Ahora sos Administrador. Recargá la página si no se actualiza.');
 		} catch (e) {
 			toastsStore.error(
@@ -184,17 +187,15 @@
 		newGuestForm = { name: '', roles: ['CAJERO'], email: '', phone: '', active: true };
 	};
 
-	const LOAD_TIMEOUT_MS = 12_000;
 	let refreshUnsub: (() => void) | null = null;
 	onMount(() => {
+		loadStartedAt = Date.now();
 		void (async () => {
 			try {
-				await Promise.race([
-					Promise.all([staffStore.load(), staffGuestsStore.load()]),
-					new Promise<void>((r) => setTimeout(r, LOAD_TIMEOUT_MS))
-				]);
+				await Promise.all([staffStore.load(), staffGuestsStore.load()]);
 			} finally {
 				loading = false;
+				if (teamList.length > 0) clearPosSelfHealMark(TEAM_SELFHEAL_SCREEN_KEY);
 			}
 			let firstRefresh = true;
 			refreshUnsub = refreshTrigger.subscribe(() => {
@@ -205,8 +206,14 @@
 				void Promise.all([staffStore.load(), staffGuestsStore.load()]);
 			});
 		})();
+		const stuckIntervalId = setInterval(() => {
+			const stuck = loading && teamList.length === 0 && Date.now() - loadStartedAt > TEAM_STUCK_RELOAD_MS;
+			if (!stuck) return;
+			tryPosSelfHealReload(TEAM_SELFHEAL_SCREEN_KEY);
+		}, 2_000);
 		return () => {
 			refreshUnsub?.();
+			clearInterval(stuckIntervalId);
 		};
 	});
 </script>

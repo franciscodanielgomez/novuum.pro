@@ -2,9 +2,13 @@
 	import { Dialog } from 'bits-ui';
 	import { DataTable } from '$lib/components/table';
 	import type { DataTableColumn } from '$lib/components/table';
-	import { supabase } from '$lib/supabase/client';
+	import { api } from '$lib/api';
+	import { asyncGuard } from '$lib/data/asyncGuard';
 	import { refreshTrigger } from '$lib/stores/refreshTrigger';
 	import { toastsStore } from '$lib/stores/toasts';
+	import { posDataCache } from '$lib/pos/cache';
+	import { posDataLog, posDataWarn } from '$lib/pos/diagnostics';
+	import { clearPosSelfHealMark, tryPosSelfHealReload } from '$lib/pos/self-heal';
 	import { onMount } from 'svelte';
 
 	type Category = {
@@ -16,8 +20,15 @@
 		updated_at: string;
 	};
 
+	type LoadStatus = 'idle' | 'loading' | 'refreshing' | 'error';
+
+	const CACHE_KEY = 'categories';
+	const CATEGORIES_STUCK_RELOAD_MS = 20_000;
+	const CATEGORIES_SELFHEAL_SCREEN_KEY = 'categories';
 	let categories = $state<Category[]>([]);
-	let loading = $state(true);
+	let status = $state<LoadStatus>('idle');
+	let loadStartedAt = $state(0);
+	let loadError = $state<string | null>(null);
 	let dialogOpen = $state(false);
 	let editingId = $state<string | null>(null);
 	let form = $state({ name: '', sort_order: 0, active: true });
@@ -29,34 +40,76 @@
 		{ id: 'active', header: 'Estado', accessorFn: (r) => (r.active ? 'Activa' : 'Inactiva') }
 	];
 
-	const LOAD_CATEGORIES_TIMEOUT_MS = 8_000;
-	const loadCategories = async () => {
-		loading = true;
-		const timeoutId = setTimeout(() => {
-			loading = false;
-			toastsStore.error('La carga de categorías tardó demasiado. Revisá la conexión o volvé a iniciar sesión.');
-		}, LOAD_CATEGORIES_TIMEOUT_MS);
-		try {
-			const { data, error } = await supabase
-				.from('categories')
-				.select('id, name, sort_order, active, created_at, updated_at')
-				.order('sort_order', { ascending: true })
-				.order('name', { ascending: true });
-
-			if (error) {
-				toastsStore.error(error.message || 'Error al cargar categorías. Si sigue fallando, probá cerrar sesión y volver a entrar.');
-				categories = [];
-			} else {
-				categories = data ?? [];
-			}
-		} catch (e) {
-			toastsStore.error(e instanceof Error ? e.message : 'Error al cargar categorías. Revisá la conexión.');
-			categories = [];
-		} finally {
-			clearTimeout(timeoutId);
-			loading = false;
-		}
+	const fetchCategories = async (): Promise<Category[]> => {
+		const data = await api.categories.list();
+		return (data ?? []) as Category[];
 	};
+
+	/** Revalidar en background; no borra datos en error. */
+	async function revalidate() {
+		const cached = categories.length > 0;
+		status = cached ? 'refreshing' : 'loading';
+		loadStartedAt = Date.now();
+		loadError = null;
+		posDataLog('categories revalidate start');
+		try {
+			const data = await fetchCategories();
+			categories = data;
+			posDataCache.set(CACHE_KEY, data);
+			status = 'idle';
+			clearPosSelfHealMark(CATEGORIES_SELFHEAL_SCREEN_KEY);
+			posDataLog('categories revalidate ok', { count: data.length });
+		} catch (e) {
+			const msg =
+				e instanceof Error && e.name === 'AbortError'
+					? 'La carga de categorías superó el tiempo de espera'
+					: e instanceof Error
+						? e.message
+						: 'Error al cargar categorías';
+			posDataWarn('categories revalidate fail', msg);
+			loadError = msg;
+			status = 'error';
+			// Nunca limpiar categories; mantener cache visible
+		} finally {
+			if (status === 'loading' || status === 'refreshing') status = 'idle';
+		}
+	}
+
+	const RETRY_INTERVAL_MS = 15_000;
+
+	onMount(() => {
+		const cached = posDataCache.get<Category[]>(CACHE_KEY);
+		if (cached?.length) {
+			categories = cached;
+			status = 'refreshing';
+		} else {
+			status = 'loading';
+		}
+		void revalidate();
+
+		const retryIntervalId = setInterval(() => {
+			if (status === 'error') void revalidate();
+		}, RETRY_INTERVAL_MS);
+		const stuckIntervalId = setInterval(() => {
+			const stuck = (status === 'loading' || status === 'refreshing') && categories.length === 0 && Date.now() - loadStartedAt > CATEGORIES_STUCK_RELOAD_MS;
+			if (!stuck) return;
+			tryPosSelfHealReload(CATEGORIES_SELFHEAL_SCREEN_KEY);
+		}, 2_000);
+
+		let firstRefresh = true;
+		const unsub = refreshTrigger.subscribe(() => {
+			if (firstRefresh) {
+				firstRefresh = false;
+				return;
+			}
+			void revalidate();
+		});
+		return () => {
+			clearInterval(retryIntervalId);
+			clearInterval(stuckIntervalId);
+			unsub();
+		};
+	});
 
 	const openCreate = () => {
 		editingId = null;
@@ -76,62 +129,61 @@
 			toastsStore.error('El nombre es obligatorio');
 			return;
 		}
-		saving = true;
-		if (editingId) {
-			const { error } = await supabase
-				.from('categories')
-				.update({ name, sort_order: form.sort_order, active: form.active, updated_at: new Date().toISOString() })
-				.eq('id', editingId);
-			if (error) {
-				toastsStore.error(error.message || 'Error al actualizar');
-			} else {
-				toastsStore.success('Categoría actualizada');
+		await asyncGuard(
+			async () => {
+				if (editingId) {
+					await api.categories.update(editingId, {
+						name,
+						sort_order: form.sort_order,
+						active: form.active,
+						updated_at: new Date().toISOString()
+					});
+					toastsStore.success('Categoría actualizada');
+				} else {
+					await api.categories.create({
+						name,
+						sort_order: form.sort_order,
+						active: form.active
+					});
+					toastsStore.success('Categoría creada');
+				}
 				dialogOpen = false;
-				await loadCategories();
+				void revalidate();
+			},
+			{
+				setLoading: (value) => (saving = value),
+				onError: (e) => {
+					toastsStore.error(
+						e instanceof Error && e.name === 'AbortError'
+							? 'Guardado agotó el tiempo de espera'
+							: 'No se pudo guardar'
+					);
+				}
 			}
-		} else {
-			const { error } = await supabase.from('categories').insert({
-				name,
-				sort_order: form.sort_order,
-				active: form.active
-			});
-			if (error) {
-				toastsStore.error(error.message || 'Error al crear');
-			} else {
-				toastsStore.success('Categoría creada');
-				dialogOpen = false;
-				await loadCategories();
-			}
-		}
-		saving = false;
+		);
 	};
 
 	const remove = async (id: string) => {
 		if (!confirm('¿Eliminar esta categoría?')) return;
-		const { error } = await supabase.from('categories').delete().eq('id', id);
-		if (error) {
-			toastsStore.error(error.message || 'Error al eliminar');
-		} else {
-			toastsStore.success('Categoría eliminada');
-			await loadCategories();
-		}
+		await asyncGuard(
+			async () => {
+				await api.categories.remove(id);
+				toastsStore.success('Categoría eliminada');
+				void revalidate();
+			},
+			{
+				onError: (e) => {
+					toastsStore.error(
+						e instanceof Error && e.name === 'AbortError'
+							? 'Eliminación agotó el tiempo de espera'
+							: 'No se pudo eliminar'
+					);
+				}
+			}
+		);
 	};
 
-	onMount(() => {
-		void loadCategories();
-		let firstRefresh = true;
-		const unsub = refreshTrigger.subscribe(() => {
-			if (firstRefresh) {
-				firstRefresh = false;
-				return;
-			}
-			void loadCategories();
-		});
-		return () => {
-			unsub();
-		};
-	});
-
+	const loading = $derived((status === 'loading' || status === 'refreshing') && categories.length === 0);
 </script>
 
 <div class="space-y-4">
@@ -140,6 +192,11 @@
 		<p class="text-xs text-slate-500 dark:text-slate-400">
 			Organizá los productos por tipo (bebidas, comidas, etc.) y orden de aparición.
 		</p>
+		{#if status === 'error' && loadError}
+			<p class="mt-2 text-sm text-amber-600 dark:text-amber-400">
+				Sin conexión o error. Mostrando datos guardados. Reintentando…
+			</p>
+		{/if}
 	</div>
 
 	<section class="panel p-4">

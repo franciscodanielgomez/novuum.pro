@@ -7,7 +7,7 @@
 	import type { StatusFilterValue } from '$lib/components/StatusFilterButton.svelte';
 	import DataTablePaginator from '$lib/components/table/DataTablePaginator.svelte';
 	import { loadTableState, saveTableState } from '$lib/components/table/table.state';
-	import { ordersStore } from '$lib/stores/orders';
+	import { ordersStore, ordersStatus, ordersLoadError } from '$lib/stores/orders';
 	import { refreshTrigger } from '$lib/stores/refreshTrigger';
 	import { staffStore } from '$lib/stores/staff';
 	import { staffGuestsStore } from '$lib/stores/staffGuests';
@@ -19,6 +19,8 @@
 	import { downloadOrderTicketPdf } from '$lib/printing/ticket-pdf';
 	import { onMount } from 'svelte';
 	import { browser } from '$app/environment';
+	import { get } from 'svelte/store';
+	import { clearPosSelfHealMark, tryPosSelfHealReload } from '$lib/pos/self-heal';
 
 	function ymdToCalendarDate(ymd: string): CalendarDate | undefined {
 		if (!ymd || ymd.length < 10) return undefined;
@@ -95,6 +97,9 @@
 
 	let columnVisibility = $state<Record<string, boolean>>({});
 	let columnVisibilityOpen = $state(false);
+	const ORDERS_STUCK_RELOAD_MS = 20_000;
+	const ORDERS_SELFHEAL_SCREEN_KEY = 'orders';
+	let loadStartedAt = $state(0);
 
 	const isColumnVisible = (id: string) => columnVisibility[id] !== false;
 
@@ -524,34 +529,30 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 		}
 	}
 
-	const LOAD_TIMEOUT_MS = 12_000;
 	const loadOrdersData = () =>
-		Promise.all([ordersStore.load(), staffStore.load(), staffGuestsStore.load()]).catch(() => {
-			toastsStore.error(
-				'No se pudieron cargar los pedidos. Comprobá la conexión e iniciá sesión de nuevo si hace falta.'
-			);
-		});
+		Promise.all([ordersStore.load(), staffStore.load(), staffGuestsStore.load()]);
 
 	let refreshUnsub: (() => void) | null = null;
 	onMount(() => {
-		void (async () => {
-			try {
-				await Promise.race([
-					loadOrdersData(),
-					new Promise<void>((r) => setTimeout(r, LOAD_TIMEOUT_MS))
-				]);
-			} catch {
-				toastsStore.error(
-					'No se pudieron cargar los pedidos. Comprobá la conexión e iniciá sesión de nuevo si hace falta.'
-				);
+		loadStartedAt = Date.now();
+		void loadOrdersData();
+		const stopRetry = ordersStore.startRetryLoop();
+		let firstRefresh = true;
+		refreshUnsub = refreshTrigger.subscribe(() => {
+			if (firstRefresh) {
+				firstRefresh = false;
+				return;
 			}
-			let firstRefresh = true;
-			refreshUnsub = refreshTrigger.subscribe(() => {
-				if (firstRefresh) {
-					firstRefresh = false;
-					return;
-				}
-				void loadOrdersData();
+			void loadOrdersData();
+		});
+			const stuckIntervalId = setInterval(() => {
+				const st = get(ordersStatus);
+				const stuck = (st === 'loading' || st === 'refreshing') && get(ordersStore).length === 0 && Date.now() - loadStartedAt > ORDERS_STUCK_RELOAD_MS;
+				if (!stuck) return;
+				tryPosSelfHealReload(ORDERS_SELFHEAL_SCREEN_KEY);
+			}, 2_000);
+			const unsubLoaded = ordersStore.subscribe((rows) => {
+				if (rows.length > 0) clearPosSelfHealMark(ORDERS_SELFHEAL_SCREEN_KEY);
 			});
 			if (browser) {
 				const saved = loadTableState('pedidos');
@@ -589,9 +590,11 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 					sortDir = sort[0].desc ? 'desc' : 'asc';
 				}
 			}
-		})();
 		return () => {
+			stopRetry();
 			refreshUnsub?.();
+			clearInterval(stuckIntervalId);
+			unsubLoaded();
 		};
 	});
 </script>
@@ -603,6 +606,11 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 			<p class="text-xs text-slate-500 dark:text-slate-400">
 				Listado de pedidos: filtrar por estado y buscar por ID, teléfono o dirección.
 			</p>
+			{#if $ordersStatus === 'error' && $ordersLoadError}
+				<p class="mt-2 text-sm text-amber-600 dark:text-amber-400">
+					Sin conexión o error. Mostrando datos guardados. Reintentando…
+				</p>
+			{/if}
 		</div>
 	</div>
 

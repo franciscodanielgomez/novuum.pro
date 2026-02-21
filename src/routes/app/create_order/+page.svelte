@@ -7,7 +7,6 @@
 		type ProductOptionGroup
 	} from '$lib/schema/product-options';
 	import { customerSchema } from '$lib/schemas';
-	import { supabase } from '$lib/supabase/client';
 	import { businessStore } from '$lib/stores/business';
 	import { catalogStore } from '$lib/stores/catalog';
 	import { customersStore } from '$lib/stores/customers';
@@ -18,6 +17,7 @@
 	import { toastsStore } from '$lib/stores/toasts';
 	import { fromZustand } from '$lib/stores/zustandBridge';
 	import { api } from '$lib/api';
+	import { refreshTrigger } from '$lib/stores/refreshTrigger';
 	import { printTicket } from '$lib/printing/printer';
 	import { orderToTicketText } from '$lib/printing/ticket-layout';
 	import type { Customer, Order, OrderDraft, OrderItem, PaymentMethod, Product, SKU } from '$lib/types';
@@ -69,6 +69,7 @@
 	let newClientForm = $state({ phone: '', address: '', betweenStreets: '', notes: '' });
 	let configOpen = $state(false);
 	let configLoading = $state(false);
+	let configLoadController: AbortController | null = null;
 	let configError = $state('');
 	let configTarget: { sku: SKU; product: Product } | null = null;
 	let configGroups: ProductOptionGroup[] = [];
@@ -83,6 +84,20 @@
 	/** ID del draft a eliminar (muestra modal de confirmación) */
 	let deleteDraftConfirmId = $state<string | null>(null);
 	const productsOptionsState = fromZustand(productsStore);
+
+	const isAbortError = (e: unknown): boolean =>
+		e instanceof Error
+			? e.name === 'AbortError' || /abort/i.test(e.message)
+			: false;
+
+	$effect(() => {
+		if (configOpen) return;
+		if (configLoadController) {
+			configLoadController.abort();
+			configLoadController = null;
+		}
+		configLoading = false;
+	});
 
 	/** Métodos de pago desde la BD (Configuraciones); para selector y solo Efectivo muestra Paga con / Vuelto */
 	type PaymentMethodRow = { id: string; name: string; sort_order: number; active: boolean };
@@ -105,28 +120,58 @@
 	};
 	let supabaseCategories = $state<SupabaseCategory[]>([]);
 	let supabaseProductsRaw = $state<SupabaseProductRow[]>([]);
-	const loadSupabaseCatalog = async () => {
-		const [catRes, prodRes] = await Promise.all([
-			supabase.from('categories').select('id, name, sort_order').eq('active', true).order('sort_order', { ascending: true }),
-			supabase.from('products').select('id, name, description, price, image_url, product_categories(category_id)').eq('active', true).order('name', { ascending: true })
-		]);
-		if (!catRes.error && catRes.data) supabaseCategories = catRes.data as SupabaseCategory[];
-		if (!prodRes.error && prodRes.data) supabaseProductsRaw = prodRes.data as SupabaseProductRow[];
+	let catalogLoading = $state(true);
+	let catalogError = $state('');
+	let catalogLoadAttempted = $state(false);
+	const loadSupabaseCatalog = async (showLoading = true) => {
+		if (showLoading && !catalogLoadAttempted) {
+			catalogLoadAttempted = true;
+			catalogLoading = true;
+			catalogError = '';
+		}
+		try {
+			const [cats, prods] = await Promise.all([api.categories.list(), api.products.list()]);
+			supabaseCategories = (cats ?? [])
+				.filter((c) => c.active)
+				.map((c) => ({ id: c.id, name: c.name, sort_order: c.sort_order })) as SupabaseCategory[];
+			supabaseProductsRaw = (prods ?? [])
+				.filter((p) => p.active)
+				.map((p) => ({
+					id: p.id,
+					name: p.name,
+					description: p.description,
+					price: p.price,
+					image_url: p.image_url ?? null,
+					product_categories: (p.product_categories ?? []).map((pc) => ({ category_id: pc.category_id }))
+				})) as SupabaseProductRow[];
+			catalogError = '';
+		} catch (e) {
+			const msg =
+				e instanceof Error && e.message
+					? e.message
+					: 'No se pudo cargar el catálogo desde Supabase';
+			catalogError = msg;
+			toastsStore.error(msg);
+		} finally {
+			catalogLoading = false;
+		}
 	};
 
 	async function loadPaymentMethods() {
-		const { data, error } = await supabase
-			.from('payment_methods')
-			.select('id, name, sort_order, active')
-			.eq('active', true)
-			.order('sort_order', { ascending: true });
-		if (!error && data) {
-			paymentMethods = data.map((r) => ({
+		try {
+			const data = await api.paymentMethods.listActive();
+			paymentMethods = (data ?? []).map((r) => ({
 				id: r.id,
 				name: r.name,
 				sort_order: r.sort_order ?? 0,
 				active: r.active ?? true
 			}));
+		} catch (e) {
+			const msg =
+				e instanceof Error && e.message
+					? e.message
+					: 'No se pudieron cargar los métodos de pago';
+			toastsStore.error(msg);
 		}
 	}
 	const useSupabaseCatalog = $derived(supabaseCategories.length > 0 && supabaseProductsRaw.length > 0);
@@ -224,10 +269,11 @@
 	const activeDraft = $derived(
 		draftsList.find((d) => d.id === activeDraftId) ?? null
 	);
+	// Solo mostramos catálogo desde Supabase; sin fallback a catalogStore para no mostrar datos que no son de la base
 	const categories = $derived(
 		useSupabaseCatalog
 			? supabaseCategories.map((c) => ({ id: c.id, name: c.name, sort: c.sort_order })).sort((a, b) => a.sort - b.sort)
-			: $catalogStore.categories
+			: []
 	);
 	const products = $derived(
 		useSupabaseCatalog
@@ -239,13 +285,7 @@
 					const txt = `${p.name} ${p.description}`.toLowerCase();
 					return txt.includes(productSearch.toLowerCase());
 				})
-			: $catalogStore.products.filter((p) => {
-					const selectedCategory = activeDraft?.categoryId ?? 'all';
-					if (selectedCategory !== 'all' && p.categoryId !== selectedCategory) return false;
-					if (!productSearch.trim()) return true;
-					const txt = `${p.name} ${p.description}`.toLowerCase();
-					return txt.includes(productSearch.toLowerCase());
-				})
+			: []
 	);
 	const selectedCustomer = $derived(
 		activeDraft ? ($customersStore.find((c) => c.id === activeDraft.selectedCustomerId) ?? null) : null
@@ -320,57 +360,60 @@
 			return;
 		}
 		clientModalSaving = true;
-		draftCount += 1;
-		const newDraft = createDraft(draftCount);
-		const newDraftWithClient: OrderDraft = {
-			...newDraft,
-			selectedCustomerId: customer.id,
-			customerPhoneSnapshot: customer.phone,
-			addressSnapshot: customer.address,
-			betweenStreetsSnapshot: customer.betweenStreets
-		};
-		draftsStore.addDraft(newDraftWithClient);
-		draftsList = draftsStore.current.slice();
-		activeDraftId = newDraft.id;
-		if (typeof sessionStorage !== 'undefined') {
-			try {
-				const list = draftsStore.current;
-				sessionStorage.setItem(
-					DRAFTS_STORAGE_KEY,
-					JSON.stringify({ drafts: list, activeDraftId: newDraft.id, draftCount })
-				);
-			} catch {
-				// ignore
+		try {
+			draftCount += 1;
+			const newDraft = createDraft(draftCount);
+			const newDraftWithClient: OrderDraft = {
+				...newDraft,
+				selectedCustomerId: customer.id,
+				customerPhoneSnapshot: customer.phone,
+				addressSnapshot: customer.address,
+				betweenStreetsSnapshot: customer.betweenStreets
+			};
+			draftsStore.addDraft(newDraftWithClient);
+			draftsList = draftsStore.current.slice();
+			activeDraftId = newDraft.id;
+			if (typeof sessionStorage !== 'undefined') {
+				try {
+					const list = draftsStore.current;
+					sessionStorage.setItem(
+						DRAFTS_STORAGE_KEY,
+						JSON.stringify({ drafts: list, activeDraftId: newDraft.id, draftCount })
+					);
+				} catch {
+					// ignore
+				}
 			}
+			await tick();
+			await new Promise((r) => setTimeout(r, 150));
+			await tick();
+			clientModalOpen = false;
+			// Crear pedido BORRADOR en el repo en segundo plano y asignar orderId al draft
+			void (async () => {
+				try {
+					const created = await ordersStore.create({
+						customerId: customer.id,
+						customerPhoneSnapshot: customer.phone,
+						addressSnapshot: customer.address,
+						betweenStreetsSnapshot: customer.betweenStreets,
+						status: 'BORRADOR',
+						paymentMethod: newDraft.paymentMethod,
+						total: 0,
+						items: [],
+						createdByUserId: $sessionStore.user?.id,
+						cashierNameSnapshot: $sessionStore.user?.name,
+						shiftId: $sessionStore.shift?.id
+					});
+					draftsStore.update((prev) =>
+						prev.map((d) => (d.id === newDraft.id ? { ...d, orderId: created.id } : d))
+					);
+				} catch {
+					toastsStore.error('No se pudo crear el pedido en borrador');
+				}
+			})();
+		} finally {
+			clientModalSaving = false;
 		}
-		await tick();
-		await new Promise((r) => setTimeout(r, 150));
-		await tick();
-		clientModalOpen = false;
-		clientModalSaving = false;
-		// Crear pedido BORRADOR en el repo en segundo plano y asignar orderId al draft
-		void (async () => {
-			try {
-				const created = await ordersStore.create({
-					customerId: customer.id,
-					customerPhoneSnapshot: customer.phone,
-					addressSnapshot: customer.address,
-					betweenStreetsSnapshot: customer.betweenStreets,
-					status: 'BORRADOR',
-					paymentMethod: newDraft.paymentMethod,
-					total: 0,
-					items: [],
-					createdByUserId: $sessionStore.user?.id,
-					cashierNameSnapshot: $sessionStore.user?.name,
-					shiftId: $sessionStore.shift?.id
-				});
-				draftsStore.update((prev) =>
-					prev.map((d) => (d.id === newDraft.id ? { ...d, orderId: created.id } : d))
-				);
-			} catch {
-				toastsStore.error('No se pudo crear el pedido en borrador');
-			}
-		})();
 	};
 
 	const addNewClient = async () => {
@@ -403,7 +446,7 @@
 	const findSkusByProduct = (productId: string): SKU[] =>
 		useSupabaseCatalog
 			? supabaseSkus.filter((sku) => sku.productId === productId)
-			: $catalogStore.skus.filter((sku) => sku.productId === productId);
+			: [];
 
 	const getConfigOptions = (groupId: string): ConfigOption[] => {
 		const raw =
@@ -480,24 +523,24 @@
 
 	const openConfig = async (sku: SKU, product: Product) => {
 		if (useSupabaseCatalog) {
+			if (configLoadController) configLoadController.abort();
+			const controller = new AbortController();
+			configLoadController = controller;
 			configLoading = true;
 			configError = '';
 			try {
-				const { data: assignments, error: assignErr } = await supabase
-					.from('product_product_groups')
-					.select('group_id, max_select')
-					.eq('product_id', product.id);
-				if (assignErr || !assignments?.length) {
+				const assignments = await api.products.listAssignments(product.id, controller.signal);
+				if (!assignments?.length) {
 					addSku(sku, product);
 					return;
 				}
 				const groupIds = assignments.map((a) => a.group_id);
 				const [groupsRes, itemsRes] = await Promise.all([
-					supabase.from('product_groups').select('id, name, sort_order').in('id', groupIds),
-					supabase.from('product_group_items').select('id, group_id, parent_id, name, sort_order, active, image_url').in('group_id', groupIds).order('sort_order', { ascending: true }).order('name', { ascending: true })
+					api.groups.listByIds(groupIds, controller.signal),
+					api.groups.listItemsByGroupIds(groupIds, controller.signal)
 				]);
-				const groupsData = (groupsRes.data ?? []) as { id: string; name: string; sort_order: number }[];
-				const itemsData = (itemsRes.data ?? []) as { id: string; group_id: string; parent_id: string | null; name: string; sort_order: number; active: boolean; image_url?: string | null }[];
+				const groupsData = (groupsRes ?? []) as { id: string; name: string; sort_order: number }[];
+				const itemsData = (itemsRes ?? []) as { id: string; group_id: string; parent_id: string | null; name: string; sort_order: number; active: boolean; image_url?: string | null }[];
 				const now = new Date().toISOString();
 				const groups: ProductOptionGroup[] = groupsData.map((g) => {
 					const assignment = assignments.find((a) => a.group_id === g.id);
@@ -543,8 +586,14 @@
 				selectionsByGroup = Object.fromEntries(groups.map((g) => [g.id, []]));
 				optionQtyById = {};
 				configOpen = true;
+			} catch (e) {
+				if (isAbortError(e)) return;
+				configError =
+					e instanceof Error && e.message ? e.message : 'No se pudo cargar la configuración del producto';
+				toastsStore.error(configError);
 			} finally {
 				configLoading = false;
+				if (configLoadController === controller) configLoadController = null;
 			}
 			return;
 		}
@@ -920,8 +969,21 @@
 			}
 		})();
 		productsStore.getState().hydrate();
+		// Al volver de inactividad (visibility/focus o cada 2 min), el layout dispara refreshTrigger; recargamos catálogo y métodos de pago
+		let firstRefresh = true;
+		const refreshUnsub = refreshTrigger.subscribe(() => {
+			if (firstRefresh) {
+				firstRefresh = false;
+				return;
+			}
+			void loadSupabaseCatalog(false);
+			void loadPaymentMethods();
+		});
 		window.addEventListener('keydown', onKeyDown);
-		return () => window.removeEventListener('keydown', onKeyDown);
+		return () => {
+			refreshUnsub();
+			window.removeEventListener('keydown', onKeyDown);
+		};
 	});
 </script>
 
@@ -1045,6 +1107,20 @@
 
 		{#if selectedCustomer}
 		<section class="panel p-4">
+			{#if catalogLoading}
+				<p class="py-8 text-center text-sm text-slate-500 dark:text-slate-400">Cargando catálogo…</p>
+			{:else if catalogError && !useSupabaseCatalog}
+				<div class="py-8 text-center">
+					<p class="text-sm text-red-600 dark:text-red-400">{catalogError}</p>
+					<button
+						type="button"
+						class="btn-primary mt-3"
+						onclick={() => void loadSupabaseCatalog(true)}
+					>
+						Reintentar
+					</button>
+				</div>
+			{:else}
 			<div class="mb-3 flex items-center gap-2">
 				<input
 					class="input"
@@ -1189,6 +1265,7 @@
 						<p class="text-sm text-slate-500 dark:text-slate-400">No hay productos para esa búsqueda.</p>
 					{/if}
 				</div>
+			{/if}
 			{/if}
 		</section>
 		{:else if activeDraft}

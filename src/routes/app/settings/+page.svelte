@@ -1,7 +1,7 @@
 <script lang="ts">
+	import { api } from '$lib/api';
 	import { businessStore } from '$lib/stores/business';
 	import { refreshTrigger } from '$lib/stores/refreshTrigger';
-	import { supabase } from '$lib/supabase/client';
 	import { toastsStore } from '$lib/stores/toasts';
 	import {
 		isTauri,
@@ -15,6 +15,7 @@
 	import { updateStore } from '$lib/stores/updateStore';
 	import { get } from 'svelte/store';
 	import { onMount } from 'svelte';
+	import { getPosSelfHealEnabled, setPosSelfHealEnabled } from '$lib/pos/self-heal';
 
 	type PaymentMethod = { id: string; name: string; sort_order: number; active: boolean };
 
@@ -22,6 +23,7 @@
 	let newMethodName = $state('');
 	let shippingPriceInput = $state('');
 	let loading = $state(true);
+	let loadError = $state(false);
 	let savingShipping = $state(false);
 	let savingMethod = $state(false);
 
@@ -37,6 +39,7 @@
 	let savedPrinterDisplay = $state<string>('');
 	let detectingPrinters = $state(false);
 	let printingTest = $state(false);
+	let selfHealEnabled = $state(true);
 
 	// Actualizaciones (solo Desktop): usa updateStore (estado compartido con el menú de perfil)
 	let installingUpdate = $state(false);
@@ -98,17 +101,16 @@
 	}
 
 	async function loadPaymentMethods() {
-		const { data, error } = await supabase
-			.from('payment_methods')
-			.select('id, name, sort_order, active')
-			.order('sort_order', { ascending: true });
-		if (!error && data) {
+		try {
+			const data = await api.paymentMethods.listActive();
 			paymentMethods = data.map((r) => ({
 				id: r.id,
 				name: r.name,
 				sort_order: r.sort_order ?? 0,
 				active: r.active ?? true
 			}));
+		} catch {
+			paymentMethods = [];
 		}
 	}
 
@@ -141,29 +143,45 @@
 			return;
 		}
 		savingMethod = true;
-		const maxOrder = paymentMethods.length > 0 ? Math.max(...paymentMethods.map((p) => p.sort_order)) : -1;
-		const { data, error } = await supabase
-			.from('payment_methods')
-			.insert({ name, sort_order: maxOrder + 1, active: true })
-			.select('id, name, sort_order, active')
-			.single();
-		savingMethod = false;
-		if (!error && data) {
-			paymentMethods = [...paymentMethods, { id: data.id, name: data.name, sort_order: data.sort_order ?? 0, active: data.active ?? true }];
+		try {
+			const maxOrder = paymentMethods.length > 0 ? Math.max(...paymentMethods.map((p) => p.sort_order)) : -1;
+			const data = await api.paymentMethods.create({ name, sort_order: maxOrder + 1, active: true });
+			paymentMethods = [
+				...paymentMethods,
+				{ id: data.id, name: data.name, sort_order: data.sort_order ?? 0, active: data.active ?? true }
+			];
 			newMethodName = '';
 			toastsStore.success('Método de pago agregado');
-		} else {
-			toastsStore.error(error?.message ?? 'No se pudo agregar el método de pago');
+		} catch (error) {
+			toastsStore.error(error instanceof Error && error.message ? error.message : 'No se pudo agregar el método de pago');
+		} finally {
+			savingMethod = false;
 		}
 	}
 
 	async function deletePaymentMethod(id: string) {
-		const { error } = await supabase.from('payment_methods').delete().eq('id', id);
-		if (!error) {
+		try {
+			await api.paymentMethods.remove(id);
 			paymentMethods = paymentMethods.filter((p) => p.id !== id);
 			toastsStore.success('Método de pago eliminado');
-		} else {
-			toastsStore.error(error?.message ?? 'No se pudo eliminar');
+		} catch (error) {
+			toastsStore.error(error instanceof Error && error.message ? error.message : 'No se pudo eliminar');
+		}
+	}
+
+	async function refreshSettingsData() {
+		loadError = false;
+		try {
+			await businessStore.load();
+			const s = get(businessStore);
+			shippingPriceInput = String(s.shippingPrice);
+			ticketFontSizeInput = String(s.ticketFontSizePt ?? 30);
+			ticketMarginLeftInput = String(s.ticketMarginLeft ?? 5);
+			ticketMarginRightInput = String(s.ticketMarginRight ?? 40);
+			await loadPaymentMethods();
+		} catch {
+			loadError = true;
+			toastsStore.error('Error al cargar configuraciones. Revisá la conexión.');
 		}
 	}
 
@@ -198,6 +216,7 @@
 	}
 
 	onMount(() => {
+		selfHealEnabled = getPosSelfHealEnabled();
 		// Mostrar el formulario al instante con datos del store (layout ya suele tenerlos)
 		const store = get(businessStore);
 		shippingPriceInput = String(store.shippingPrice);
@@ -209,20 +228,6 @@
 		savedPrinterDisplay = saved;
 		loading = false;
 
-		// Refrescar datos en segundo plano (no bloquear la UI)
-		const refreshSettingsData = async () => {
-			try {
-				await businessStore.load();
-				const s = get(businessStore);
-				shippingPriceInput = String(s.shippingPrice);
-				ticketFontSizeInput = String(s.ticketFontSizePt ?? 30);
-				ticketMarginLeftInput = String(s.ticketMarginLeft ?? 5);
-				ticketMarginRightInput = String(s.ticketMarginRight ?? 40);
-				await loadPaymentMethods();
-			} catch {
-				toastsStore.error('Error al cargar configuraciones. Revisá la conexión.');
-			}
-		};
 		void refreshSettingsData();
 		let firstRefresh = true;
 		const unsub = refreshTrigger.subscribe(() => {
@@ -250,6 +255,18 @@
 
 	{#if loading}
 		<p class="text-sm text-slate-500 dark:text-slate-400">Cargando…</p>
+	{:else if loadError}
+		<div class="panel rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/40">
+			<p class="text-sm text-amber-800 dark:text-amber-200">No se pudieron cargar los datos. Probá reconectar o recargar la página.</p>
+			<div class="mt-3 flex flex-wrap gap-2">
+				<button type="button" class="btn-primary" onclick={() => void refreshSettingsData()}>
+					Reintentar
+				</button>
+				<button type="button" class="btn-secondary" onclick={() => window.location.reload()}>
+					Recargar página
+				</button>
+			</div>
+		</div>
 	{:else}
 		<div class="grid grid-cols-1 gap-4 md:grid-cols-2">
 			<!-- Impresión (Tauri nativo / web fallback) -->
@@ -352,6 +369,27 @@
 							{savingTicketPrint ? 'Guardando…' : 'Guardar'}
 						</button>
 					</div>
+				</div>
+			</section>
+
+			<section class="panel min-w-0 p-6 md:col-span-2">
+				<h2 class="text-sm font-semibold text-slate-800 dark:text-slate-200">Auto-recuperación POS</h2>
+				<p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+					Si una pantalla queda colgada sin datos, la app puede recargarse automáticamente para recuperarse.
+				</p>
+				<div class="mt-3 flex items-center gap-3">
+					<label class="flex items-center gap-2 text-sm">
+						<input
+							type="checkbox"
+							checked={selfHealEnabled}
+							onchange={(e) => {
+								selfHealEnabled = (e.currentTarget as HTMLInputElement).checked;
+								setPosSelfHealEnabled(selfHealEnabled);
+								toastsStore.success(selfHealEnabled ? 'Auto-recuperación activada' : 'Auto-recuperación desactivada');
+							}}
+						/>
+						Activar auto-recuperación
+					</label>
 				</div>
 			</section>
 

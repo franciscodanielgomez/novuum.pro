@@ -1,5 +1,5 @@
+import { dbDelete, dbInsert, dbSelect, dbUpdate } from '$lib/data/db';
 import type { StaffGuest, StaffRole } from '$lib/types';
-import { supabase } from '$lib/supabase/client';
 
 type Row = {
 	id: string;
@@ -12,9 +12,10 @@ type Row = {
 };
 
 function rowToGuest(row: Row): StaffGuest {
-	const rolesArr = Array.isArray(row.roles) && row.roles.length > 0
-		? (row.roles as StaffRole[])
-		: [row.role as StaffRole];
+	const rolesArr =
+		Array.isArray(row.roles) && row.roles.length > 0
+			? (row.roles as StaffRole[])
+			: [row.role as StaffRole];
 	return {
 		id: row.id,
 		name: row.name,
@@ -27,31 +28,42 @@ function rowToGuest(row: Row): StaffGuest {
 }
 
 export const staffGuestsRepo = {
-	async list(): Promise<StaffGuest[]> {
-		const { data, error } = await supabase
-			.from('staff_guests')
-			.select('id, name, role, roles, email, phone, active')
-			.order('name', { ascending: true });
-		if (error) throw error;
+	async list(signal?: AbortSignal): Promise<StaffGuest[]> {
+		const data = await dbSelect<Row[]>(
+			'staff_guests',
+			({ signal: dbSignal, client }) =>
+				client
+					.from('staff_guests')
+					.select('id, name, role, roles, email, phone, active')
+					.order('name', { ascending: true })
+					.abortSignal(signal ?? dbSignal),
+			{ signal, source: 'staffGuestsRepo.list' }
+		);
 		return (data ?? []).map((r) => rowToGuest(r as Row));
 	},
 
 	async create(payload: Omit<StaffGuest, 'id'>): Promise<StaffGuest> {
 		const roles = payload.roles ?? [payload.role];
-		const { data, error } = await supabase
-			.from('staff_guests')
-			.insert({
+		const data = await dbInsert<Row>(
+			'staff_guests',
+			{
 				name: payload.name,
 				role: roles[0],
 				roles,
 				email: payload.email?.trim() || null,
 				phone: payload.phone?.trim() || null,
 				active: payload.active ?? true
-			})
-			.select('id, name, role, roles, email, phone, active')
-			.single();
-		if (error) throw error;
-		return rowToGuest(data as Row);
+			},
+			({ signal, client, payload: row }) =>
+				client
+					.from('staff_guests')
+					.insert(row)
+					.select('id, name, role, roles, email, phone, active')
+					.abortSignal(signal)
+					.single(),
+			{ source: 'staffGuestsRepo.create' }
+		);
+		return rowToGuest(data);
 	},
 
 	async update(id: string, payload: Partial<Omit<StaffGuest, 'id'>>): Promise<StaffGuest | null> {
@@ -68,28 +80,47 @@ export const staffGuestsRepo = {
 		if (payload.phone !== undefined) updates.phone = payload.phone?.trim() || null;
 		if (payload.active !== undefined) updates.active = payload.active;
 		if (Object.keys(updates).length === 0) return this.get(id);
-		const { data, error } = await supabase
-			.from('staff_guests')
-			.update(updates)
-			.eq('id', id)
-			.select('id, name, role, roles, email, phone, active')
-			.single();
-		if (error) throw error;
-		return data ? rowToGuest(data as Row) : null;
+
+		const data = await dbUpdate<Row | null>(
+			'staff_guests',
+			updates,
+			{ id },
+			({ signal, client, payload, match }) =>
+				client
+					.from('staff_guests')
+					.update(payload)
+					.eq('id', match.id as string)
+					.select('id, name, role, roles, email, phone, active')
+					.abortSignal(signal)
+					.maybeSingle(),
+			{ source: 'staffGuestsRepo.update' }
+		);
+		return data ? rowToGuest(data) : null;
 	},
 
 	async get(id: string): Promise<StaffGuest | null> {
-		const { data, error } = await supabase
-			.from('staff_guests')
-			.select('id, name, role, roles, email, phone, active')
-			.eq('id', id)
-			.single();
-		if (error || !data) return null;
-		return rowToGuest(data as Row);
+		const data = await dbSelect<Row | null>(
+			'staff_guests',
+			({ signal, client }) =>
+				client
+					.from('staff_guests')
+					.select('id, name, role, roles, email, phone, active')
+					.eq('id', id)
+					.abortSignal(signal)
+					.maybeSingle(),
+			{ source: 'staffGuestsRepo.get' }
+		);
+		return data ? rowToGuest(data) : null;
 	},
 
 	async remove(id: string): Promise<void> {
-		const { error } = await supabase.from('staff_guests').delete().eq('id', id);
-		if (error) throw error;
+		await dbDelete(
+			'staff_guests',
+			{ id },
+			({ signal, client, match }) =>
+				client.from('staff_guests').delete().eq('id', match.id as string).abortSignal(signal),
+			{ source: 'staffGuestsRepo.remove' }
+		);
 	}
 };
+

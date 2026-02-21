@@ -1,10 +1,14 @@
 <script lang="ts">
 	import { Dialog } from 'bits-ui';
+	import { api } from '$lib/api';
 	import { DataTable } from '$lib/components/table';
 	import type { DataTableColumn } from '$lib/components/table';
-	import { supabase } from '$lib/supabase/client';
+	import { asyncGuard } from '$lib/data/asyncGuard';
 	import { refreshTrigger } from '$lib/stores/refreshTrigger';
 	import { toastsStore } from '$lib/stores/toasts';
+	import { posDataCache } from '$lib/pos/cache';
+	import { posDataLog, posDataWarn } from '$lib/pos/diagnostics';
+	import { clearPosSelfHealMark, tryPosSelfHealReload } from '$lib/pos/self-heal';
 	import { onMount } from 'svelte';
 
 	type Group = {
@@ -28,8 +32,16 @@
 		updated_at: string;
 	};
 
+	type LoadStatus = 'idle' | 'loading' | 'refreshing' | 'error';
+	const CACHE_KEY = 'groups';
+	const RETRY_INTERVAL_MS = 15_000;
+	const GROUPS_STUCK_RELOAD_MS = 20_000;
+	const GROUPS_SELFHEAL_SCREEN_KEY = 'groups';
+
 	let groups = $state<Group[]>([]);
-	let loading = $state(true);
+	let status = $state<LoadStatus>('idle');
+	let loadStartedAt = $state(0);
+	let loadError = $state<string | null>(null);
 	let dialogOpen = $state(false);
 	let detailDrawerOpen = $state(false);
 	let editingId = $state<string | null>(null);
@@ -38,6 +50,7 @@
 
 	let groupItems = $state<GroupItem[]>([]);
 	let groupItemsLoading = $state(false);
+	let groupItemsLoadError = $state(false);
 	let newItemName = $state('');
 	let newItemParentId = $state<string | null>(null);
 	let addingItem = $state(false);
@@ -48,56 +61,80 @@
 	let savingItemEdit = $state(false);
 	let groupToDelete = $state<Group | null>(null);
 	let itemSearchQuery = $state('');
+	let groupItemsLoadController: AbortController | null = null;
 
-	const selectedGroup = $derived(editingId ? groups.find((g) => g.id === editingId) ?? null : null);
+	const selectedGroup = $derived.by(() =>
+		editingId ? groups.find((g: Group) => g.id === editingId) ?? null : null
+	);
 
-	const LOAD_GROUPS_TIMEOUT_MS = 8_000;
-	const loadGroups = async () => {
-		loading = true;
-		const timeoutId = setTimeout(() => {
-			loading = false;
-			toastsStore.error('La carga de grupos tardó demasiado. Revisá la conexión.');
-		}, LOAD_GROUPS_TIMEOUT_MS);
-		try {
-			const { data, error } = await supabase
-				.from('product_groups')
-				.select('id, name, sort_order, active, created_at, updated_at')
-				.order('sort_order', { ascending: true })
-				.order('name', { ascending: true });
-
-			if (error) {
-				toastsStore.error(error.message || 'Error al cargar grupos. Si sigue fallando, probá cerrar sesión y volver a entrar.');
-				groups = [];
-			} else {
-				groups = data ?? [];
-			}
-		} catch (e) {
-			toastsStore.error(e instanceof Error ? e.message : 'Error al cargar grupos. Revisá la conexión o volvé a iniciar sesión.');
-			groups = [];
-		} finally {
-			clearTimeout(timeoutId);
-			loading = false;
-		}
+	const fetchGroupsFromSupabase = async (): Promise<Group[]> => {
+		const data = await api.groups.list();
+		return (data ?? []) as Group[];
 	};
 
-	const loadGroupItems = async (groupId: string) => {
-		groupItemsLoading = true;
-		const { data, error } = await supabase
-			.from('product_group_items')
-			.select('id, group_id, parent_id, name, sort_order, active, image_url, created_at, updated_at')
-			.eq('group_id', groupId)
-			.order('sort_order', { ascending: true })
-			.order('name', { ascending: true });
+	const fetchGroupItemsFromSupabase = async (groupId: string, signal?: AbortSignal) => {
+		const data = await api.groups.listItems(groupId, signal);
+		return (data ?? []) as GroupItem[];
+	};
 
-		if (error) {
-			toastsStore.error(error.message || 'Error al cargar ítems');
-			groupItems = [];
-		} else {
-			groupItems = data ?? [];
-			const catIds = (data ?? []).filter((i: GroupItem) => i.parent_id == null).map((i: GroupItem) => i.id);
-			expandedCategories = new Set(catIds);
+	async function revalidate() {
+		const cached = groups.length > 0;
+		status = cached ? 'refreshing' : 'loading';
+		loadStartedAt = Date.now();
+		loadError = null;
+		posDataLog('groups revalidate start');
+		try {
+			const data = await fetchGroupsFromSupabase();
+			groups = data;
+			posDataCache.set(CACHE_KEY, data);
+			status = 'idle';
+			clearPosSelfHealMark(GROUPS_SELFHEAL_SCREEN_KEY);
+			posDataLog('groups revalidate ok', { count: data.length });
+		} catch (e) {
+			const msg =
+				e instanceof Error && e.name === 'AbortError'
+					? 'La carga de grupos superó el tiempo de espera'
+					: e instanceof Error
+						? e.message
+						: 'Error al cargar grupos';
+			posDataWarn('groups revalidate fail', msg);
+			loadError = msg;
+			status = 'error';
+		} finally {
+			if (status === 'loading' || status === 'refreshing') status = 'idle';
 		}
-		groupItemsLoading = false;
+	}
+
+	const loadGroups = () => void revalidate();
+
+	const loadGroupItems = async (groupId: string) => {
+		if (groupItemsLoadController) groupItemsLoadController.abort();
+		const controller = new AbortController();
+		groupItemsLoadController = controller;
+		groupItemsLoading = true;
+		groupItemsLoadError = false;
+		try {
+			const data = await fetchGroupItemsFromSupabase(groupId, controller.signal);
+			groupItems = data;
+			const catIds = data
+				.filter((i: GroupItem) => i.parent_id == null)
+				.map((i: GroupItem) => i.id);
+			expandedCategories = new Set(catIds);
+		} catch (e) {
+			if (e instanceof Error && e.name === 'AbortError') return;
+			groupItemsLoadError = true;
+			groupItems = [];
+			const message =
+				e instanceof Error && e.name === 'AbortError'
+					? 'La carga de ítems del grupo superó el tiempo de espera'
+					: e instanceof Error && e.message
+						? e.message
+					: 'No se pudieron cargar los ítems del grupo';
+			toastsStore.error(message);
+		} finally {
+			groupItemsLoading = false;
+			if (groupItemsLoadController === controller) groupItemsLoadController = null;
+		}
 	};
 
 	const categories = $derived(
@@ -146,87 +183,129 @@
 		void loadGroupItems(g.id);
 	};
 
+	// Ref actualizado en cada render para que el callback de refreshTrigger lea el estado actual del drawer
+	const drawerRef = { open: false, editingId: null as string | null };
+	$effect(() => {
+		drawerRef.open = detailDrawerOpen;
+		drawerRef.editingId = editingId;
+	});
+
+	$effect(() => {
+		if (detailDrawerOpen) return;
+		if (groupItemsLoadController) {
+			groupItemsLoadController.abort();
+			groupItemsLoadController = null;
+		}
+		groupItemsLoading = false;
+	});
+
 	const save = async () => {
 		const name = form.name.trim();
 		if (!name) {
 			toastsStore.error('El nombre es obligatorio');
 			return;
 		}
-		saving = true;
-		if (editingId) {
-			const { error } = await supabase
-				.from('product_groups')
-				.update({ name, sort_order: form.sort_order, active: form.active, updated_at: new Date().toISOString() })
-				.eq('id', editingId);
-			if (error) {
-				toastsStore.error(error.message || 'Error al actualizar');
-			} else {
-				toastsStore.success('Grupo actualizado');
-				dialogOpen = false;
-				detailDrawerOpen = false;
-				await loadGroups();
-			}
-		} else {
-			const { error } = await supabase.from('product_groups').insert({
-				name,
-				sort_order: form.sort_order,
-				active: form.active
-			});
-			if (error) {
-				toastsStore.error(error.message || 'Error al crear');
-			} else {
+		await asyncGuard(
+			async () => {
+				if (editingId) {
+					await api.groups.updateGroup(editingId, {
+						name,
+						sort_order: form.sort_order,
+						active: form.active,
+						updated_at: new Date().toISOString()
+					});
+					toastsStore.success('Grupo actualizado');
+					dialogOpen = false;
+					detailDrawerOpen = false;
+					await loadGroups();
+					return;
+				}
+				await api.groups.createGroup({
+					name,
+					sort_order: form.sort_order,
+					active: form.active
+				});
 				toastsStore.success('Grupo creado');
 				dialogOpen = false;
 				await loadGroups();
+			},
+			{
+				setLoading: (value) => (saving = value),
+				onError: (e) => {
+					toastsStore.error(
+						e instanceof Error && e.name === 'AbortError'
+							? 'Guardado agotó el tiempo de espera'
+							: 'No se pudo guardar el grupo'
+					);
+				}
 			}
-		}
-		saving = false;
+		);
 	};
 
 	const saveGroupFromDrawer = async () => {
 		const name = form.name.trim();
-		if (!name || !editingId) return;
-		saving = true;
-		const { error } = await supabase
-			.from('product_groups')
-			.update({ name, sort_order: form.sort_order, active: form.active, updated_at: new Date().toISOString() })
-			.eq('id', editingId);
-		saving = false;
-		if (error) {
-			toastsStore.error(error.message || 'Error al actualizar');
-		} else {
-			toastsStore.success('Grupo actualizado');
-			await loadGroups();
-		}
+		const groupId = editingId;
+		if (!name || !groupId) return;
+		await asyncGuard(
+			async () => {
+				await api.groups.updateGroup(groupId, {
+					name,
+					sort_order: form.sort_order,
+					active: form.active,
+					updated_at: new Date().toISOString()
+				});
+				toastsStore.success('Grupo actualizado');
+				await loadGroups();
+			},
+			{
+				setLoading: (value) => (saving = value),
+				onError: (e) => {
+					toastsStore.error(
+						e instanceof Error && e.name === 'AbortError'
+							? 'Guardado agotó el tiempo de espera'
+							: 'No se pudo guardar el grupo'
+					);
+				}
+			}
+		);
 	};
 
 	const addItem = async (parentId: string | null) => {
 		const name = newItemName.trim();
-		if (!name || !editingId) {
+		const groupId = editingId;
+		if (!name || !groupId) {
 			toastsStore.error('Escribí el nombre');
 			return;
 		}
-		addingItem = true;
 		const countInLevel = parentId
 			? groupItems.filter((i) => i.parent_id === parentId).length
 			: groupItems.filter((i) => i.parent_id == null).length;
-		const { error } = await supabase.from('product_group_items').insert({
-			group_id: editingId,
-			parent_id: parentId,
-			name,
-			sort_order: countInLevel,
-			active: true
-		});
-		addingItem = false;
-		if (error) {
-			toastsStore.error(error.message || 'Error al agregar');
-		} else {
-			toastsStore.success(parentId ? 'Ítem agregado' : 'Categoría agregada');
-			newItemName = '';
-			if (parentId) expandedCategories.add(parentId);
-			expandedCategories = new Set(expandedCategories);
-			void loadGroupItems(editingId);
-		}
+		await asyncGuard(
+			async () => {
+				await api.groups.createItem({
+					group_id: groupId,
+					parent_id: parentId,
+					name,
+					sort_order: countInLevel,
+					active: true
+				});
+				toastsStore.success(parentId ? 'Ítem agregado' : 'Categoría agregada');
+				newItemName = '';
+				if (parentId) expandedCategories.add(parentId);
+				expandedCategories = new Set(expandedCategories);
+				void loadGroupItems(groupId);
+			},
+			{
+				setLoading: (value) => (addingItem = value),
+				onError: (e) => {
+					toastsStore.error(
+						e instanceof Error && e.name === 'AbortError'
+							? 'Alta agotó el tiempo de espera'
+							: 'No se pudo agregar el ítem'
+					);
+				}
+			}
+		);
 	};
 
 	const startEditItem = (item: GroupItem) => {
@@ -241,23 +320,33 @@
 	};
 	const saveItemEdit = async () => {
 		const name = editingItemName.trim();
-		if (!name || !editingItemId) return;
-		savingItemEdit = true;
+		const itemId = editingItemId;
+		if (!name || !itemId) return;
 		const imageUrl = editingItemImageUrl.trim() || null;
-		const { error } = await supabase
-			.from('product_group_items')
-			.update({ name, image_url: imageUrl, updated_at: new Date().toISOString() })
-			.eq('id', editingItemId);
-		savingItemEdit = false;
-		editingItemId = null;
-		editingItemName = '';
-		editingItemImageUrl = '';
-		if (error) {
-			toastsStore.error(error.message || 'Error al guardar');
-		} else {
-			toastsStore.success('Guardado');
-			if (editingId) void loadGroupItems(editingId);
-		}
+		await asyncGuard(
+			async () => {
+				await api.groups.updateItem(itemId, {
+					name,
+					image_url: imageUrl,
+					updated_at: new Date().toISOString()
+				});
+				editingItemId = null;
+				editingItemName = '';
+				editingItemImageUrl = '';
+				toastsStore.success('Guardado');
+				if (editingId) void loadGroupItems(editingId);
+			},
+			{
+				setLoading: (value) => (savingItemEdit = value),
+				onError: (e) => {
+					toastsStore.error(
+						e instanceof Error && e.name === 'AbortError'
+							? 'Guardado agotó el tiempo de espera'
+							: 'No se pudo guardar el ítem'
+					);
+				}
+			}
+		);
 	};
 
 	const removeItem = async (item: GroupItem) => {
@@ -270,24 +359,42 @@
 					? '¿Eliminar esta categoría?'
 					: '¿Eliminar este ítem?';
 		if (!confirm(msg)) return;
-		const { error } = await supabase.from('product_group_items').delete().eq('id', item.id);
-		if (error) {
-			toastsStore.error(error.message || 'Error al eliminar');
-		} else {
-			toastsStore.success(isCategory ? 'Categoría eliminada' : 'Ítem eliminado');
-			if (editingId) void loadGroupItems(editingId);
-		}
+		await asyncGuard(
+			async () => {
+				await api.groups.removeItem(item.id);
+				toastsStore.success(isCategory ? 'Categoría eliminada' : 'Ítem eliminado');
+				if (editingId) void loadGroupItems(editingId);
+			},
+			{
+				onError: (e) => {
+					toastsStore.error(
+						e instanceof Error && e.name === 'AbortError'
+							? 'Eliminación agotó el tiempo de espera'
+							: 'No se pudo eliminar'
+					);
+				}
+			}
+		);
 	};
 
 	const remove = async (id: string) => {
-		const { error } = await supabase.from('product_groups').delete().eq('id', id);
-		if (error) {
-			toastsStore.error(error.message || 'Error al eliminar');
-		} else {
-			toastsStore.success('Grupo eliminado');
-			if (editingId === id) detailDrawerOpen = false;
-			await loadGroups();
-		}
+		await asyncGuard(
+			async () => {
+				await api.groups.removeGroup(id);
+				toastsStore.success('Grupo eliminado');
+				if (editingId === id) detailDrawerOpen = false;
+				await loadGroups();
+			},
+			{
+				onError: (e) => {
+					toastsStore.error(
+						e instanceof Error && e.name === 'AbortError'
+							? 'Eliminación agotó el tiempo de espera'
+							: 'No se pudo eliminar'
+					);
+				}
+			}
+		);
 		groupToDelete = null;
 	};
 
@@ -296,20 +403,42 @@
 	};
 
 	onMount(() => {
-		void loadGroups();
+		const cached = posDataCache.get<Group[]>(CACHE_KEY);
+		if (cached?.length) {
+			groups = cached;
+			status = 'refreshing';
+		} else {
+			status = 'loading';
+		}
+		void revalidate();
+		const retryIntervalId = setInterval(() => {
+			if (status === 'error') void revalidate();
+		}, RETRY_INTERVAL_MS);
+		const stuckIntervalId = setInterval(() => {
+			const stuck = (status === 'loading' || status === 'refreshing') && groups.length === 0 && Date.now() - loadStartedAt > GROUPS_STUCK_RELOAD_MS;
+			if (!stuck) return;
+			tryPosSelfHealReload(GROUPS_SELFHEAL_SCREEN_KEY);
+		}, 2_000);
 		let firstRefresh = true;
 		const unsub = refreshTrigger.subscribe(() => {
 			if (firstRefresh) {
 				firstRefresh = false;
 				return;
 			}
-			void loadGroups();
+			void revalidate();
+			// Si el modal del grupo está abierto, recargar ítems para que el árbol no quede en "Cargando..."
+			if (drawerRef.open && drawerRef.editingId) {
+				void loadGroupItems(drawerRef.editingId);
+			}
 		});
 		return () => {
+			clearInterval(retryIntervalId);
+			clearInterval(stuckIntervalId);
 			unsub();
 		};
 	});
 
+	const loading = $derived((status === 'loading' || status === 'refreshing') && groups.length === 0);
 	const groupColumns: DataTableColumn<Group>[] = [
 		{ id: 'name', header: 'Nombre', accessorKey: 'name' },
 		{ id: 'sort_order', header: 'Orden', accessorKey: 'sort_order' },
@@ -323,6 +452,11 @@
 		<p class="text-xs text-slate-500 dark:text-slate-400">
 			Grupos de opciones por producto (sabores, tamaños, extras) y sus ítems.
 		</p>
+		{#if status === 'error' && loadError}
+			<p class="mt-2 text-sm text-amber-600 dark:text-amber-400">
+				Sin conexión o error. Mostrando datos guardados. Reintentando…
+			</p>
+		{/if}
 	</div>
 
 	<section class="panel p-4">
@@ -495,6 +629,17 @@
 
 						{#if groupItemsLoading}
 							<p class="py-4 text-center text-sm text-slate-500">Cargando…</p>
+						{:else if groupItemsLoadError}
+							<div class="rounded-lg border border-amber-200 bg-amber-50 py-4 text-center dark:border-amber-800 dark:bg-amber-950/40">
+								<p class="text-sm text-amber-800 dark:text-amber-200">No se pudieron cargar los ítems. Revisá la conexión.</p>
+								<button
+									type="button"
+									class="btn-primary mt-2"
+									onclick={() => editingId && loadGroupItems(editingId)}
+								>
+									Reintentar
+								</button>
+							</div>
 						{:else if categories.length === 0}
 							<p class="rounded-lg border border-dashed border-slate-300 py-4 text-center text-sm text-slate-500 dark:border-slate-600">
 								Aún no hay categorías. Agregá una arriba con "Agregar como categoría".

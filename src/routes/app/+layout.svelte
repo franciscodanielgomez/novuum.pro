@@ -3,14 +3,14 @@
 	import { goto } from '$app/navigation';
 	import { desktopDownloadStore } from '$lib/desktop-download';
 	import { isTauri } from '$lib/printing/printer';
-	import LogoNovuum from '$lib/components/LogoNovuum.svelte';
-	import { businessStore } from '$lib/stores/business';
+import LogoNovuum from '$lib/components/LogoNovuum.svelte';
+import { businessStore } from '$lib/stores/business';
 	import { refreshTrigger } from '$lib/stores/refreshTrigger';
+	import { sessionLog } from '$lib/session-debug';
 	import { sessionStore } from '$lib/stores/session';
 	import { themeStore } from '$lib/stores/theme';
 	import { updateStore } from '$lib/stores/updateStore';
 	import { onMount, tick } from 'svelte';
-	import { browser } from '$app/environment';
 
 	let { children } = $props();
 	let sidebarCollapsed = $state(false);
@@ -91,54 +91,112 @@
 	// Lista plana para cuando el menú está colapsado (solo iconos)
 	const items = navGroups.flatMap((g) => g.items);
 
-	const LAYOUT_LOAD_TIMEOUT_MS = 10_000;
 	onMount(() => {
 		void (async () => {
-			await Promise.race([
-				Promise.all([sessionStore.hydrate(), businessStore.load()]),
-				new Promise<void>((r) => setTimeout(r, LAYOUT_LOAD_TIMEOUT_MS))
-			]);
 			if (!$sessionStore.user) {
-				await goto('/login');
+				await sessionStore.hydrate();
+				if (!$sessionStore.user) {
+					await goto('/login');
+					return;
+				}
+			} else {
+				// Si ya hay usuario en store, igualmente hidratar en segundo plano para alinear token/sesión real.
+				void sessionStore.hydrate();
 			}
+			// No disparar hydrate() extra: puede competir por lock de auth en reactivaciones.
+			await businessStore.load();
 		})();
 		if (isTauri()) {
 			updateStore.init();
 		} else {
 			desktopDownloadStore.init();
 		}
-		// Revalidar sesión cada 5 min para que la app siga reconociendo que estás registrado
-		const SESSION_REVALIDATE_MS = 5 * 60 * 1000;
-		const sessionInterval = setInterval(() => {
-			void sessionStore.hydrate();
-		}, SESSION_REVALIDATE_MS);
-		// Cada 2 min y al volver a la pestaña: refrescar negocio y avisar a la página actual para que recargue datos
+		// Refresco automático: negocio + perfil de usuario (menú) + trigger para páginas. Rápido al volver o navegar.
 		const refreshData = () => {
 			void businessStore.load();
+			void sessionStore.refreshUserProfile();
 			refreshTrigger.update((n) => n + 1);
 		};
 		const DATA_REFRESH_MS = 2 * 60 * 1000;
 		const dataInterval = setInterval(refreshData, DATA_REFRESH_MS);
+		// Al volver a la pestaña o ventana (ej. después de imprimir): recarga completa para reconectar siempre
+		const MIN_RETURN_DEBOUNCE_MS = 400;
+		// Tras 3s sin actividad en la misma pestaña, el primer clic dispara refresh; tras 30s recarga completa
+		const INACTIVITY_REVALIDATE_MS = 3_000;
+		const INACTIVITY_FULL_RELOAD_MS = 30_000;
+		const ACTIVITY_DEBOUNCE_MS = 50;
+		let lastReturnAt = 0;
+		let lastActivityAt = Date.now();
+		let lastActivityTick = 0;
+		let idleRefreshLock = false;
+		const onReturnToApp = () => {
+			const now = Date.now();
+			if (MIN_RETURN_DEBOUNCE_MS > 0 && now - lastReturnAt < MIN_RETURN_DEBOUNCE_MS) return;
+			lastReturnAt = now;
+			sessionLog('onReturnToApp: volviste a la app → recarga de página para reconectar');
+			window.location.reload();
+		};
+		const onUserActivity = () => {
+			const now = Date.now();
+			if (now - lastActivityTick < ACTIVITY_DEBOUNCE_MS) return;
+			lastActivityTick = now;
+			const idleMs = now - lastActivityAt;
+			const wasIdle = idleMs >= INACTIVITY_REVALIDATE_MS;
+			lastActivityAt = now;
+			if (!wasIdle || idleRefreshLock) return;
+			idleRefreshLock = true;
+			if (idleMs >= INACTIVITY_FULL_RELOAD_MS) {
+				sessionLog('onUserActivity: inactividad larga → recarga de página');
+				window.location.reload();
+				return;
+			}
+			sessionLog('onUserActivity: idle → refreshData');
+			void refreshData();
+			setTimeout(() => {
+				idleRefreshLock = false;
+			}, 1_000);
+		};
 		const onVisibilityChange = () => {
 			if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-				void sessionStore.hydrate();
-				refreshData();
+				onReturnToApp();
+			}
+		};
+		const onWindowFocus = () => {
+			if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+				onReturnToApp();
 			}
 		};
 		document.addEventListener('visibilitychange', onVisibilityChange);
+		window.addEventListener('focus', onWindowFocus);
+		window.addEventListener('pointerdown', onUserActivity, true);
+		window.addEventListener('keydown', onUserActivity, true);
+		window.addEventListener('touchstart', onUserActivity, true);
+		// Al navegar (link, botón que lleva a otra ruta) refrescar datos para reconectar; no se dispara a cada rato mientras usás la misma pantalla
+		let prevPath: string | null = null;
+		const unsubPage = page.subscribe((p) => {
+			const path = p.url.pathname;
+			if (prevPath === null) {
+				prevPath = path;
+				return;
+			}
+			if (prevPath === path) return;
+			prevPath = path;
+			sessionLog('onNavigate → refreshData');
+			void refreshData();
+		});
 		return () => {
-			clearInterval(sessionInterval);
+			unsubPage();
 			clearInterval(dataInterval);
 			document.removeEventListener('visibilitychange', onVisibilityChange);
+			window.removeEventListener('focus', onWindowFocus);
+			window.removeEventListener('pointerdown', onUserActivity, true);
+			window.removeEventListener('keydown', onUserActivity, true);
+			window.removeEventListener('touchstart', onUserActivity, true);
 		};
 	});
 
-	// Si la sesión se invalida (token expirado, cierre en otro tab), redirigir a login sin dejar /app en el historial
-	$effect(() => {
-		if (browser && $sessionStore.ready && !$sessionStore.user) {
-			goto('/login', { replaceState: true });
-		}
-	});
+	// POS always-on: no redirigir automáticamente por user=null transitorio.
+	// El login se fuerza solo en mount inicial sin usuario o hard-expired con acción explícita.
 
 	// Cerrar menú avatar al hacer clic fuera (botón y dropdown tienen stopPropagation / están excluidos)
 	$effect(() => {

@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { Country, State } from 'country-state-city';
 	import { getCountries, getCountryCallingCode } from 'libphonenumber-js/min';
+	import { api } from '$lib/api';
 	import { supabase } from '$lib/supabase/client';
 	import { removeStorageFileIfOurs } from '$lib/supabase/storage-helpers';
+	import { refreshTrigger } from '$lib/stores/refreshTrigger';
 	import { sessionStore } from '$lib/stores/session';
 	import { toastsStore } from '$lib/stores/toasts';
 	import { onDestroy, onMount } from 'svelte';
@@ -51,8 +53,18 @@
 	$: if (!currentUserId && $sessionStore.user?.id) {
 		currentUserId = $sessionStore.user.id;
 	}
-	$: if (!email && $sessionStore.user?.email) {
-		email = $sessionStore.user.email;
+	// Mostrar datos del perfil desde la sesión en cuanto estén disponibles (evita pantalla vacía si la API tarda o falla)
+	$: if ($sessionStore.user) {
+		if (!email) email = $sessionStore.user.email ?? '';
+		const sessionName = ($sessionStore.user.name ?? '').trim();
+		if (sessionName && !firstName && !lastName) {
+			const parts = sessionName.split(/\s+/).filter(Boolean);
+			firstName = parts[0] ?? '';
+			lastName = parts.slice(1).join(' ');
+		}
+		if ($sessionStore.user.avatarUrl?.trim() && !avatarUrl) {
+			avatarUrl = $sessionStore.user.avatarUrl.trim();
+		}
 	}
 
 	const buildDisplayInitials = () => {
@@ -70,11 +82,6 @@
 		if (typeof error === 'string' && /abort/i.test(error)) return fallback;
 		if (typeof error === 'string' && error) return error;
 		return fallback;
-	};
-
-	const sanitizeMessage = (message: string | undefined, fallback: string) => {
-		if (!message) return fallback;
-		return /abort|aborted|signal/i.test(message) ? fallback : message;
 	};
 
 	const describeSupabaseError = (error: unknown, fallback: string) => {
@@ -258,32 +265,24 @@
 			addresses = [];
 			return;
 		}
-		const { data, error } = await supabase
-			.from('user_addresses')
-			.select('id, label, address_line, city, state, postal_code, country')
-			.eq('user_id', userId)
-			.order('created_at', { ascending: true });
-		if (error) {
-			if (isMissingTableError(error.message, 'user_addresses')) {
-				addressesTableReady = false;
-				addresses = [];
-				toastsStore.error('Falta migración de base de datos: tabla user_addresses');
-				return;
-			}
-			toastsStore.error(sanitizeMessage(error.message, 'No se pudieron cargar las direcciones'));
-			return;
+		try {
+			const data = await api.userAddresses.listByUserId(userId);
+			addressesTableReady = true;
+			addresses =
+				data?.map((item) => ({
+					id: item.id,
+					label: item.label ?? '',
+					addressLine: item.address_line ?? '',
+					city: item.city ?? '',
+					state: item.state ?? '',
+					postalCode: item.postal_code ?? '',
+					country: item.country ?? ''
+				})) ?? [];
+		} catch (error) {
+			toastsStore.error(
+				describeSupabaseError(error, 'No se pudieron cargar las direcciones')
+			);
 		}
-		addressesTableReady = true;
-		addresses =
-			data?.map((item) => ({
-				id: item.id,
-				label: item.label ?? '',
-				addressLine: item.address_line ?? '',
-				city: item.city ?? '',
-				state: item.state ?? '',
-				postalCode: item.postal_code ?? '',
-				country: item.country ?? ''
-			})) ?? [];
 	};
 
 	const addAddress = async () => {
@@ -312,16 +311,7 @@
 				postal_code: newAddress.postalCode.trim() || null,
 				country: selectedAddressCountry?.name ?? null
 			};
-			const { error } = await supabase.from('user_addresses').insert(payload);
-			if (error) {
-				if (isMissingTableError(error.message, 'user_addresses')) {
-					addressesTableReady = false;
-					toastsStore.error('No se puede guardar dirección hasta crear la tabla user_addresses');
-					return;
-				}
-				toastsStore.error(sanitizeMessage(error.message, 'No se pudo guardar la dirección'));
-				return;
-			}
+			await api.userAddresses.create(payload);
 			newAddress = {
 				label: '',
 				addressLine: '',
@@ -332,8 +322,10 @@
 			newAddressStateIso = '';
 			await loadAddresses(userId);
 			toastsStore.success('Dirección agregada');
-		} catch {
-			toastsStore.error('Ocurrió un error inesperado guardando la dirección');
+		} catch (error) {
+			toastsStore.error(
+				describeSupabaseError(error, 'Ocurrió un error inesperado guardando la dirección')
+			);
 		} finally {
 			isSavingAddress = false;
 		}
@@ -344,18 +336,15 @@
 			toastsStore.error('No se puede eliminar dirección hasta crear la tabla user_addresses');
 			return;
 		}
-		const { error } = await supabase.from('user_addresses').delete().eq('id', id);
-		if (error) {
-			if (isMissingTableError(error.message, 'user_addresses')) {
-				addressesTableReady = false;
-				toastsStore.error('Falta migración de base de datos: tabla user_addresses');
-				return;
-			}
-				toastsStore.error(sanitizeMessage(error.message, 'No se pudo eliminar la dirección'));
-			return;
+		try {
+			await api.userAddresses.removeById(id);
+			addresses = addresses.filter((addr) => addr.id !== id);
+			toastsStore.success('Dirección eliminada');
+		} catch (error) {
+			toastsStore.error(
+				describeSupabaseError(error, 'Ocurrió un error inesperado eliminando la dirección')
+			);
 		}
-		addresses = addresses.filter((addr) => addr.id !== id);
-		toastsStore.success('Dirección eliminada');
 	};
 
 	const save = async () => {
@@ -421,44 +410,23 @@
 
 			if (profileTableReady) {
 				try {
-					// More resilient than upsert when environments differ in constraints/policies.
-					const updateResult = (await supabase
-						.from('user_profiles')
-						.update({
-							first_name: profilePayload.first_name,
-							last_name: profilePayload.last_name,
-							phone: profilePayload.phone,
-							reference_phone: profilePayload.reference_phone,
-							avatar_url: profilePayload.avatar_url
-						})
-						.eq('id', userId)
-						.select('id')) as { data: Array<{ id: string }> | null; error: { message?: string } | null };
+					const updateRows = await api.userProfiles.updateById(userId, {
+						first_name: profilePayload.first_name,
+						last_name: profilePayload.last_name,
+						phone: profilePayload.phone,
+						reference_phone: profilePayload.reference_phone,
+						avatar_url: profilePayload.avatar_url
+					});
 
-					if (updateResult.error) {
-						if (isMissingTableError(updateResult.error.message, 'user_profiles')) {
-							profileTableReady = false;
-							toastsStore.error('No se puede guardar perfil hasta crear la tabla user_profiles');
-							return;
-						}
-						toastsStore.error(describeSupabaseError(updateResult.error, 'No se pudo guardar tu perfil'));
-						return;
-					}
-
-					if (!updateResult.data || updateResult.data.length === 0) {
-						const insertResult = (await supabase.from('user_profiles').insert(profilePayload)) as {
-							error: { message?: string } | null;
-						};
-						if (insertResult.error) {
-							if (isMissingTableError(insertResult.error.message, 'user_profiles')) {
-								profileTableReady = false;
-								toastsStore.error('No se puede guardar perfil hasta crear la tabla user_profiles');
-								return;
-							}
-							toastsStore.error(describeSupabaseError(insertResult.error, 'No se pudo guardar tu perfil'));
-							return;
-						}
+					if (!updateRows || updateRows.length === 0) {
+						await api.userProfiles.insert(profilePayload);
 					}
 				} catch (error) {
+					if (isMissingTableError((error as Error)?.message, 'user_profiles')) {
+						profileTableReady = false;
+						toastsStore.error('No se puede guardar perfil hasta crear la tabla user_profiles');
+						return;
+					}
 					toastsStore.error(describeSupabaseError(error, 'No se pudo guardar tu perfil por un problema de red'));
 					return;
 				}
@@ -495,6 +463,26 @@
 		if (avatarPreviewUrl) URL.revokeObjectURL(avatarPreviewUrl);
 	});
 
+	const loadProfileFromApi = async (userId: string) => {
+		try {
+			const data = await api.userProfiles.getById(userId);
+			if (data) {
+				firstName = data.first_name ?? firstName;
+				lastName = data.last_name ?? lastName;
+				const parsedPhone = splitPhone(data.phone);
+				phoneCountry = parsedPhone.country;
+				phone = parsedPhone.number;
+				const parsedRefPhone = splitPhone(data.reference_phone);
+				referencePhoneCountry = parsedRefPhone.country;
+				referencePhone = parsedRefPhone.number;
+				avatarUrl = data.avatar_url ?? avatarUrl;
+			}
+		} catch {
+			// Ya mostramos toast en onMount; en refresh no hace falta repetir
+		}
+		await loadAddresses(userId);
+	};
+
 	onMount(async () => {
 		const {
 			data: { user }
@@ -514,29 +502,39 @@
 		avatarUrl = ((user.user_metadata?.avatar_url as string | undefined) ?? '').trim();
 
 		if (profileTableReady) {
-			const { data, error: profileLoadError } = await supabase
-				.from('user_profiles')
-				.select('first_name, last_name, phone, reference_phone, avatar_url')
-				.eq('id', user.id)
-				.maybeSingle();
-			if (profileLoadError && isMissingTableError(profileLoadError.message, 'user_profiles')) {
-				profileTableReady = false;
-				toastsStore.error('Falta migración de base de datos: tabla user_profiles');
-			}
-
-			if (data) {
-				firstName = data.first_name ?? firstName;
-				lastName = data.last_name ?? lastName;
-				const parsedPhone = splitPhone(data.phone);
-				phoneCountry = parsedPhone.country;
-				phone = parsedPhone.number;
-				const parsedRefPhone = splitPhone(data.reference_phone);
-				referencePhoneCountry = parsedRefPhone.country;
-				referencePhone = parsedRefPhone.number;
-				avatarUrl = data.avatar_url ?? avatarUrl;
+			try {
+				const data = await api.userProfiles.getById(user.id);
+				if (data) {
+					firstName = data.first_name ?? firstName;
+					lastName = data.last_name ?? lastName;
+					const parsedPhone = splitPhone(data.phone);
+					phoneCountry = parsedPhone.country;
+					phone = parsedPhone.number;
+					const parsedRefPhone = splitPhone(data.reference_phone);
+					referencePhoneCountry = parsedRefPhone.country;
+					referencePhone = parsedRefPhone.number;
+					avatarUrl = data.avatar_url ?? avatarUrl;
+				}
+			} catch (error) {
+				if (isMissingTableError((error as Error)?.message, 'user_profiles')) {
+					profileTableReady = false;
+					toastsStore.error('Falta migración de base de datos: tabla user_profiles');
+				} else {
+					toastsStore.error('No se pudieron cargar los datos del perfil. Revisá la conexión.');
+				}
 			}
 		}
 		await loadAddresses(user.id);
+
+		let firstRefresh = true;
+		const unsub = refreshTrigger.subscribe(() => {
+			if (firstRefresh) {
+				firstRefresh = false;
+				return;
+			}
+			void loadProfileFromApi(user.id);
+		});
+		return () => unsub();
 	});
 </script>
 

@@ -3,29 +3,36 @@
 	import { DataTable } from '$lib/components/table';
 	import type { DataTableColumn } from '$lib/components/table';
 	import { customerSchema, customersBulkSchema } from '$lib/schemas';
-	import { customersStore } from '$lib/stores/customers';
+	import { customersStore, customersStatus, customersLoadError } from '$lib/stores/customers';
 	import { refreshTrigger } from '$lib/stores/refreshTrigger';
 	import { toastsStore } from '$lib/stores/toasts';
 	import type { Customer } from '$lib/types';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { onMount } from 'svelte';
+	import { get } from 'svelte/store';
+	import { clearPosSelfHealMark, tryPosSelfHealReload } from '$lib/pos/self-heal';
 
 	let drawerOpen = $state(false);
 	let importOpen = $state(false);
 	let importJson = $state('');
 	let importError = $state('');
 	let importing = $state(false);
-	let loading = $state(true);
 	let editing = $state<Customer | null>(null);
 	let form = $state({ phone: '', address: '', betweenStreets: '', notes: '' });
 
-	// Garantizar array para DataTable (evitar undefined si el store no está listo).
 	let customersList = $state<Customer[]>([]);
+	const CLIENTS_STUCK_RELOAD_MS = 20_000;
+	const CLIENTS_SELFHEAL_SCREEN_KEY = 'clients';
+	let loadStartedAt = $state(0);
 	$effect(() => {
-		const value = $customersStore;
-		customersList = Array.isArray(value) ? value : [];
+		const next = Array.isArray($customersStore) ? $customersStore : [];
+		customersList = next;
+		if (next.length > 0) clearPosSelfHealMark(CLIENTS_SELFHEAL_SCREEN_KEY);
 	});
+	const loading = $derived(
+		($customersStatus === 'loading' || $customersStatus === 'refreshing') && customersList.length === 0
+	);
 
 	const columns: DataTableColumn<Customer>[] = [
 		{ id: 'phone', header: 'Teléfono', accessorKey: 'phone' },
@@ -61,47 +68,49 @@
 			toastsStore.error(parsed.error.issues[0]?.message ?? 'Datos inválidos');
 			return;
 		}
-		if (editing) {
-			await customersStore.update(editing.id, parsed.data);
-			toastsStore.success('Cliente actualizado');
-		} else {
-			await customersStore.create(parsed.data);
-			toastsStore.success('Cliente creado');
+		try {
+			if (editing) {
+				await customersStore.update(editing.id, parsed.data);
+				toastsStore.success('Cliente actualizado');
+			} else {
+				await customersStore.create(parsed.data);
+				toastsStore.success('Cliente creado');
+			}
+			drawerOpen = false;
+		} catch (e) {
+			toastsStore.error((e as Error)?.name === 'AbortError' ? 'Guardado agotó el tiempo de espera' : 'No se pudo guardar el cliente');
 		}
-		drawerOpen = false;
 	};
 
-	const LOAD_TIMEOUT_MS = 12_000;
-	let refreshUnsub: (() => void) | null = null;
 	onMount(() => {
-		void (async () => {
-			try {
-				await Promise.race([
-					(async () => {
-						await customersStore.load();
-						const editId = $page.url.searchParams.get('editId');
-						if (editId) {
-							const customer = $customersStore.find((c) => c.id === editId);
-							if (customer) openEdit(customer);
-							await goto('/app/clients', { replaceState: true });
-						}
-					})(),
-					new Promise<void>((r) => setTimeout(r, LOAD_TIMEOUT_MS))
-				]);
-			} finally {
-				loading = false;
+		loadStartedAt = Date.now();
+		void customersStore.load().then(() => {
+			const editId = $page.url.searchParams.get('editId');
+			if (editId) {
+				const customer = $customersStore.find((c) => c.id === editId);
+				if (customer) openEdit(customer);
+				void goto('/app/clients', { replaceState: true });
 			}
-			let firstRefresh = true;
-			refreshUnsub = refreshTrigger.subscribe(() => {
-				if (firstRefresh) {
-					firstRefresh = false;
-					return;
-				}
-				void customersStore.load();
-			});
-		})();
+		});
+		const stopRetry = customersStore.startRetryLoop();
+		let firstRefresh = true;
+		const unsub = refreshTrigger.subscribe(() => {
+			if (firstRefresh) {
+				firstRefresh = false;
+				return;
+			}
+			void customersStore.revalidate();
+		});
+		const stuckIntervalId = setInterval(() => {
+			const st = get(customersStatus);
+			const stuck = (st === 'loading' || st === 'refreshing') && get(customersStore).length === 0 && Date.now() - loadStartedAt > CLIENTS_STUCK_RELOAD_MS;
+			if (!stuck) return;
+			tryPosSelfHealReload(CLIENTS_SELFHEAL_SCREEN_KEY);
+		}, 2_000);
 		return () => {
-			refreshUnsub?.();
+			stopRetry();
+			unsub();
+			clearInterval(stuckIntervalId);
 		};
 	});
 </script>
@@ -112,6 +121,11 @@
 		<p class="text-xs text-slate-500 dark:text-slate-400">
 			Teléfono, dirección y datos de entrega para los pedidos.
 		</p>
+		{#if $customersStatus === 'error' && $customersLoadError}
+			<p class="mt-2 text-sm text-amber-600 dark:text-amber-400">
+				Sin conexión o error. Mostrando datos guardados. Reintentando…
+			</p>
+		{/if}
 	</div>
 
 	<div class="panel p-4">

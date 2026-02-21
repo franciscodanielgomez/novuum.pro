@@ -1,5 +1,5 @@
+import { dbDelete, dbInsert, dbSelect, dbUpdate } from '$lib/data/db';
 import type { Customer } from '$lib/types';
-import { supabase } from '$lib/supabase/client';
 
 type Row = {
 	id: string;
@@ -22,28 +22,39 @@ function rowToCustomer(row: Row): Customer {
 }
 
 export const customersRepo = {
-	async list(): Promise<Customer[]> {
-		const { data, error } = await supabase
-			.from('customers')
-			.select('id, phone, address, between_streets, notes, created_at')
-			.order('created_at', { ascending: false });
-		if (error) throw error;
+	async list(signal?: AbortSignal): Promise<Customer[]> {
+		const data = await dbSelect<Row[]>(
+			'customers',
+			({ signal: dbSignal, client }) =>
+				client
+					.from('customers')
+					.select('id, phone, address, between_streets, notes, created_at')
+					.order('created_at', { ascending: false })
+					.abortSignal(signal ?? dbSignal),
+			{ signal, source: 'customersRepo.list' }
+		);
 		return (data ?? []).map(rowToCustomer);
 	},
 
 	async create(payload: Omit<Customer, 'id' | 'createdAt'>): Promise<Customer> {
-		const { data, error } = await supabase
-			.from('customers')
-			.insert({
+		const data = await dbInsert<Row>(
+			'customers',
+			{
 				phone: payload.phone,
 				address: payload.address,
 				between_streets: payload.betweenStreets?.trim() || null,
 				notes: payload.notes?.trim() || null
-			})
-			.select('id, phone, address, between_streets, notes, created_at')
-			.single();
-		if (error) throw error;
-		return rowToCustomer(data as Row);
+			},
+			({ signal, client, payload: row }) =>
+				client
+					.from('customers')
+					.insert(row)
+					.select('id, phone, address, between_streets, notes, created_at')
+					.abortSignal(signal)
+					.single(),
+			{ source: 'customersRepo.create' }
+		);
+		return rowToCustomer(data);
 	},
 
 	async update(id: string, payload: Partial<Omit<Customer, 'id' | 'createdAt'>>): Promise<Customer | null> {
@@ -52,26 +63,46 @@ export const customersRepo = {
 		if (payload.address !== undefined) updates.address = payload.address;
 		if (payload.betweenStreets !== undefined) updates.between_streets = payload.betweenStreets?.trim() || null;
 		if (payload.notes !== undefined) updates.notes = payload.notes?.trim() || null;
+
 		if (Object.keys(updates).length === 0) {
-			const { data } = await supabase
-				.from('customers')
-				.select('id, phone, address, between_streets, notes, created_at')
-				.eq('id', id)
-				.single();
-			return data ? rowToCustomer(data as Row) : null;
+			const data = await dbSelect<Row | null>(
+				'customers',
+				({ signal, client }) =>
+					client
+						.from('customers')
+						.select('id, phone, address, between_streets, notes, created_at')
+						.eq('id', id)
+						.abortSignal(signal)
+						.maybeSingle(),
+				{ source: 'customersRepo.getById' }
+			);
+			return data ? rowToCustomer(data) : null;
 		}
-		const { data, error } = await supabase
-			.from('customers')
-			.update(updates)
-			.eq('id', id)
-			.select('id, phone, address, between_streets, notes, created_at')
-			.single();
-		if (error) throw error;
-		return data ? rowToCustomer(data as Row) : null;
+
+		const data = await dbUpdate<Row | null>(
+			'customers',
+			updates,
+			{ id },
+			({ signal, client, payload, match }) =>
+				client
+					.from('customers')
+					.update(payload)
+					.eq('id', match.id as string)
+					.select('id, phone, address, between_streets, notes, created_at')
+					.abortSignal(signal)
+					.maybeSingle(),
+			{ source: 'customersRepo.update' }
+		);
+		return data ? rowToCustomer(data) : null;
 	},
 
 	async remove(id: string): Promise<void> {
-		const { error } = await supabase.from('customers').delete().eq('id', id);
-		if (error) throw error;
+		await dbDelete(
+			'customers',
+			{ id },
+			({ signal, client, match }) => client.from('customers').delete().eq('id', match.id as string).abortSignal(signal),
+			{ source: 'customersRepo.remove' }
+		);
 	}
 };
+

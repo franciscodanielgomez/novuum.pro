@@ -40,13 +40,9 @@ export const staffStore = {
 	subscribe: staff.subscribe,
 	load: async () => {
 		try {
-			const { data, error } = await supabase
-				.from('team_members')
-				.select('id, full_name, email, phone, role, roles, active')
-				.order('created_at', { ascending: false });
-
-			if (!error && data) {
-				const mapped = data.map((row: { id: string; full_name: string | null; email: string | null; phone?: string | null; role: string | null; roles?: string[] | null; active: boolean | null }) => {
+			const data = await api.teamMembers.list();
+			if (data) {
+				const mapped = data.map((row) => {
 					const rolesArr: StaffRole[] =
 						Array.isArray(row.roles) && row.roles.length > 0
 							? (row.roles as StaffRole[])
@@ -97,25 +93,29 @@ export const staffStore = {
 			updatePayload.role = payload.role;
 			updatePayload.roles = [payload.role];
 		}
-		const { error } = await supabase
-			.from('team_members')
-			.update(updatePayload)
-			.eq('id', id);
-
-		if (error) {
+		try {
+			await api.teamMembers.updateById(id, updatePayload);
+		} catch (error) {
 			try {
 				await api.staff.update(id, payload);
 				await staffStore.load();
 				return;
 			} catch {
-				throw new Error(error.message || 'No se pudo actualizar. En Supabase ejecutá la migración que permite editar tu propio rol.');
+				const message =
+					error instanceof Error && error.message
+						? error.message
+						: 'No se pudo actualizar. En Supabase ejecutá la migración que permite editar tu propio rol.';
+				throw new Error(message);
 			}
 		}
 		await staffStore.load();
 	},
 	remove: async (id: string) => {
-		const { error } = await supabase.from('team_members').delete().eq('id', id);
-		if (error) throw new Error(error.message || 'No se pudo eliminar del equipo.');
+		try {
+			await api.teamMembers.removeById(id);
+		} catch (error) {
+			throw new Error(error instanceof Error && error.message ? error.message : 'No se pudo eliminar del equipo.');
+		}
 		await staffStore.load();
 	}
 };

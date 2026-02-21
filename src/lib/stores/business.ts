@@ -1,3 +1,4 @@
+import { api } from '$lib/api';
 import { supabase } from '$lib/supabase/client';
 import { removeStorageFileIfOurs } from '$lib/supabase/storage-helpers';
 import { get, writable } from 'svelte/store';
@@ -92,14 +93,8 @@ export const businessStore = {
 	load: async () => {
 		state.update((s) => ({ ...s, loading: true }));
 		try {
-			const { data, error } = await supabase
-				.from('business_settings')
-				.select('id, company_name, branch_name, logo_url, shipping_price, phone, ticket_font_size_pt, ticket_margin_left, ticket_margin_right')
-				.order('created_at', { ascending: true })
-				.limit(1)
-				.maybeSingle();
-
-			if (!error && data) {
+			const data = await api.businessSettings.getFirst();
+			if (data) {
 				const num = (v: unknown, def: number) =>
 					typeof v === 'number' && !Number.isNaN(v) ? v : def;
 				const next: BusinessSettings = {
@@ -145,8 +140,8 @@ export const businessStore = {
 		};
 
 		if (current.id) {
-			const { error } = await supabase.from('business_settings').update(payload).eq('id', current.id);
-			if (!error) {
+			try {
+				await api.businessSettings.updateById(current.id, payload);
 				const next = {
 					companyName,
 					branchName,
@@ -160,16 +155,13 @@ export const businessStore = {
 				writeFallback(next);
 				state.update((s) => ({ ...s, ...next }));
 				return true;
+			} catch {
+				// fallback a insert abajo
 			}
 		}
 
-		const { data, error } = await supabase
-			.from('business_settings')
-			.insert(payload)
-			.select('id, company_name, branch_name, logo_url, shipping_price, phone, ticket_font_size_pt, ticket_margin_left, ticket_margin_right')
-			.single();
-
-		if (!error && data) {
+		try {
+			const data = await api.businessSettings.insert(payload);
 			const next: BusinessSettings = {
 				companyName: data.company_name?.trim() || companyName,
 				branchName: data.branch_name?.trim() || branchName,
@@ -183,6 +175,8 @@ export const businessStore = {
 			writeFallback(next);
 			state.set({ id: data.id, ...next, loading: false });
 			return true;
+		} catch {
+			// fallback local
 		}
 
 		const fallbackNext = {
@@ -204,16 +198,14 @@ export const businessStore = {
 		if (!current.id) return false;
 		const num = Number(value);
 		if (Number.isNaN(num) || num < 0) return false;
-		const { error } = await supabase
-			.from('business_settings')
-			.update({ shipping_price: num })
-			.eq('id', current.id);
-		if (!error) {
+		try {
+			await api.businessSettings.updateById(current.id, { shipping_price: num });
 			state.update((s) => ({ ...s, shippingPrice: num }));
 			writeFallback({ ...readFallback(), shippingPrice: num });
 			return true;
+		} catch {
+			return false;
 		}
-		return false;
 	},
 
 	/**
@@ -235,17 +227,13 @@ export const businessStore = {
 			ticket_margin_left: ticketMarginLeft,
 			ticket_margin_right: ticketMarginRight
 		};
-		const { data, error } = await supabase
-			.from('business_settings')
-			.update(payload)
-			.eq('id', current.id)
-			.select('id')
-			.maybeSingle();
-		if (error) {
-			return { ok: false, error: error.message || 'Error al guardar en la base de datos' };
-		}
-		if (!data) {
-			return { ok: false, error: 'No se actualizó ninguna fila (¿tenés permisos?)' };
+		try {
+			await api.businessSettings.updateById(current.id, payload);
+		} catch (e) {
+			return {
+				ok: false,
+				error: e instanceof Error ? e.message || 'Error al guardar en la base de datos' : 'Error al guardar en la base de datos'
+			};
 		}
 		state.update((s) => ({
 			...s,

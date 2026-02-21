@@ -1,9 +1,9 @@
 <script lang="ts">
+	import { api } from '$lib/api';
 	import { Country, State } from 'country-state-city';
 	import { getCountries, getCountryCallingCode } from 'libphonenumber-js/min';
 	import { businessStore } from '$lib/stores/business';
 	import { sessionStore } from '$lib/stores/session';
-	import { supabase } from '$lib/supabase/client';
 	import { toastsStore } from '$lib/stores/toasts';
 	import { onDestroy, onMount } from 'svelte';
 
@@ -144,27 +144,26 @@
 	});
 
 	async function loadAddresses(businessSettingsId: string) {
-		const { data, error } = await supabase
-			.from('business_addresses')
-			.select('id, label, address_line, city, state, postal_code, country, is_primary')
-			.eq('business_settings_id', businessSettingsId)
-			.order('is_primary', { ascending: false })
-			.order('created_at', { ascending: true });
-		if (error) {
-			toastsStore.error(error.message ?? 'No se pudieron cargar las direcciones');
+		try {
+			const data = await api.businessAddresses.listByBusinessSettingsId(businessSettingsId);
+			addresses = (data ?? []).map((r) => ({
+				id: r.id,
+				label: r.label ?? '',
+				addressLine: r.address_line ?? '',
+				city: r.city ?? '',
+				state: r.state ?? '',
+				postalCode: r.postal_code ?? '',
+				country: r.country ?? '',
+				isPrimary: r.is_primary ?? false
+			}));
+		} catch (e) {
+			const msg =
+				e instanceof Error && e.message
+					? e.message
+					: 'No se pudieron cargar las direcciones';
+			toastsStore.error(msg);
 			addresses = [];
-			return;
 		}
-		addresses = (data ?? []).map((r) => ({
-			id: r.id,
-			label: r.label ?? '',
-			addressLine: r.address_line ?? '',
-			city: r.city ?? '',
-			state: r.state ?? '',
-			postalCode: r.postal_code ?? '',
-			country: r.country ?? '',
-			isPrimary: r.is_primary ?? false
-		}));
 	}
 
 	async function addAddress() {
@@ -179,59 +178,61 @@
 			return;
 		}
 		isSavingAddress = true;
-		const stateName = addressStateOptions.find((s) => s.iso === newAddressStateIso)?.name ?? null;
-		const { error } = await supabase.from('business_addresses').insert({
-			business_settings_id: settingsId,
-			label: newAddress.label.trim(),
-			address_line: newAddress.addressLine.trim(),
-			city: newAddress.city.trim() || null,
-			state: stateName,
-			postal_code: newAddress.postalCode.trim() || null,
-			country: selectedAddressCountry?.name ?? null,
-			is_primary: addresses.length === 0
-		});
-		isSavingAddress = false;
-		if (error) {
-			toastsStore.error(error.message ?? 'No se pudo guardar la dirección');
-			return;
+		try {
+			const stateName = addressStateOptions.find((s) => s.iso === newAddressStateIso)?.name ?? null;
+			await api.businessAddresses.create({
+				business_settings_id: settingsId,
+				label: newAddress.label.trim(),
+				address_line: newAddress.addressLine.trim(),
+				city: newAddress.city.trim() || null,
+				state: stateName,
+				postal_code: newAddress.postalCode.trim() || null,
+				country: selectedAddressCountry?.name ?? null,
+				is_primary: addresses.length === 0
+			});
+			newAddress = { label: '', addressLine: '', city: '', postalCode: '' };
+			newAddressCountryIso = 'AR';
+			newAddressStateIso = '';
+			await loadAddresses(settingsId);
+			toastsStore.success('Dirección agregada');
+		} catch (e) {
+			const msg =
+				e instanceof Error && e.message
+					? e.message
+					: 'Ocurrió un error inesperado guardando la dirección';
+			toastsStore.error(msg);
+		} finally {
+			isSavingAddress = false;
 		}
-		newAddress = { label: '', addressLine: '', city: '', postalCode: '' };
-		newAddressCountryIso = 'AR';
-		newAddressStateIso = '';
-		await loadAddresses(settingsId);
-		toastsStore.success('Dirección agregada');
 	}
 
 	async function removeAddress(id: string) {
 		const settingsId = $businessStore.id;
 		if (!settingsId) return;
-		const { error } = await supabase.from('business_addresses').delete().eq('id', id);
-		if (error) {
-			toastsStore.error(error.message ?? 'No se pudo eliminar');
-			return;
+		try {
+			await api.businessAddresses.removeById(id);
+			addresses = addresses.filter((a) => a.id !== id);
+			toastsStore.success('Dirección eliminada');
+		} catch (e) {
+			const msg =
+				e instanceof Error && e.message
+					? e.message
+					: 'Ocurrió un error inesperado eliminando la dirección';
+			toastsStore.error(msg);
 		}
-		addresses = addresses.filter((a) => a.id !== id);
-		toastsStore.success('Dirección eliminada');
 	}
 
 	async function setPrimaryAddress(id: string) {
 		const settingsId = $businessStore.id;
 		if (!settingsId) return;
-		const { error: unsetError } = await supabase
-			.from('business_addresses')
-			.update({ is_primary: false })
-			.eq('business_settings_id', settingsId);
-		if (unsetError) {
-			toastsStore.error(unsetError.message ?? 'Error al actualizar');
-			return;
+		try {
+			await api.businessAddresses.clearPrimaryBySettingsId(settingsId);
+			await api.businessAddresses.setPrimaryById(id);
+			addresses = addresses.map((a) => ({ ...a, isPrimary: a.id === id }));
+			toastsStore.success('Dirección principal actualizada');
+		} catch (e) {
+			toastsStore.error(e instanceof Error && e.message ? e.message : 'Error al marcar como principal');
 		}
-		const { error } = await supabase.from('business_addresses').update({ is_primary: true }).eq('id', id);
-		if (error) {
-			toastsStore.error(error.message ?? 'Error al marcar como principal');
-			return;
-		}
-		addresses = addresses.map((a) => ({ ...a, isPrimary: a.id === id }));
-		toastsStore.success('Dirección principal actualizada');
 	}
 
 	const save = async () => {

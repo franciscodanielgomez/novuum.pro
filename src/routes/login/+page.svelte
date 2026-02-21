@@ -35,8 +35,6 @@
 			if (mode === 'login') {
 				const result = await sessionStore.login(email, password);
 				if (!result.ok) {
-					// Limpiar estado de auth para que el próximo intento (con la clave correcta) funcione
-					supabase.auth.signOut().catch(() => {});
 					let msg = result.message ?? 'No se pudo iniciar sesión';
 					if (/invalid.*credentials|invalid login|email.*password|contraseña|password/i.test(msg)) {
 						msg = 'Correo o contraseña incorrectos. Revisá los datos e intentá de nuevo.';
@@ -45,12 +43,11 @@
 					toastsStore.error(msg);
 					return;
 				}
-				loading = false;
 				toastsStore.success('Sesión iniciada');
 				if (browser) {
-					window.location.href = '/app';
+					window.location.href = '/app/orders';
 				} else {
-					await goto('/app');
+					await goto('/app/orders');
 				}
 				return;
 			}
@@ -67,11 +64,7 @@
 			}
 			loading = false;
 			toastsStore.success('Cuenta creada y sesión iniciada');
-			if (browser) {
-				window.location.href = '/app';
-			} else {
-				await goto('/app');
-			}
+			await goto('/app/orders');
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : 'Error inesperado. Revisá la conexión.';
 			loginError = msg;

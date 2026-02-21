@@ -6,10 +6,14 @@
 		productCreateSchema,
 		type ProductOptionGroup
 	} from '$lib/schema/product-options';
+	import { api } from '$lib/api';
+	import { asyncGuard } from '$lib/data/asyncGuard';
 	import { productsStore } from '$lib/stores/productsStore';
 	import { refreshTrigger } from '$lib/stores/refreshTrigger';
 	import { fromZustand } from '$lib/stores/zustandBridge';
 	import { toastsStore } from '$lib/stores/toasts';
+	import { posDataCache } from '$lib/pos/cache';
+	import { clearPosSelfHealMark, tryPosSelfHealReload } from '$lib/pos/self-heal';
 	import { formatMoney } from '$lib/utils';
 	import { supabase } from '$lib/supabase/client';
 	import { removeStorageFileIfOurs } from '$lib/supabase/storage-helpers';
@@ -24,7 +28,10 @@
 	} from '$lib/components/products/products-table-persistence';
 	import ProductsPaginator from '$lib/components/products/ProductsPaginator.svelte';
 
-	type ProductCategoryLink = { category_id: string; categories: { id: string; name: string } | null };
+	type ProductCategoryLink = {
+		category_id: string;
+		categories: { id: string; name: string } | Array<{ id: string; name: string }> | null;
+	};
 	type SupabaseProduct = {
 		id: string;
 		name: string;
@@ -48,7 +55,12 @@
 	// Lista para la tabla (mismo patrón que Categorías: se asigna en load)
 	let products = $state<SupabaseProduct[]>([]);
 	let productsLoading = $state(true);
+	let productsLoadError = $state<string | null>(null);
 	let useSupabase = $state(true);
+	let productsLoadInFlight: Promise<void> | null = null;
+	let productsRetryTimeoutId: ReturnType<typeof setTimeout> | null = null;
+	let productsLoadStartedAt = 0;
+	let drawerLoadController: AbortController | null = null;
 
 	let editingProductId = $state<string | null>(null);
 	let targetProductId = $state<string | null>(null);
@@ -80,6 +92,10 @@
 	type CategoryOption = { id: string; name: string };
 	type ProductGroupOption = { id: string; name: string };
 	type ProductGroupAssignment = { group_id: string; max_select: number };
+	const PRODUCTS_CACHE_KEY = 'products';
+	const PRODUCTS_RETRY_MS = 15_000;
+	const PRODUCTS_STUCK_RELOAD_MS = 20_000;
+	const PRODUCTS_SELFHEAL_SCREEN_KEY = 'products';
 	const PRODUCT_IMAGES_BUCKET = 'novum-grido';
 	let productForm = $state({
 		name: '',
@@ -96,67 +112,89 @@
 	let productGroupsList = $state<ProductGroupOption[]>([]);
 	let groupForm = $state({ name: '', min_select: 0, max_select: 1, sort_order: 0 });
 	let optionForm = $state({ name: '', price_delta: 0, active: true, sort_order: 0 });
+	const isTimeoutError = (e: unknown): boolean =>
+		(e instanceof Error && e.name === 'AbortError') ||
+		(typeof e === 'object' &&
+			e !== null &&
+			'name' in e &&
+			(e as { name?: string }).name === 'AppError' &&
+			'kind' in e &&
+			(e as { kind?: string }).kind === 'timeout');
 
 	const loadCategories = async () => {
-		const { data, error } = await supabase
-			.from('categories')
-			.select('id, name')
-			.eq('active', true)
-			.order('sort_order', { ascending: true })
-			.order('name', { ascending: true });
-		if (!error && data) categoriesList = data as CategoryOption[];
+		const data = await api.products.listCategories();
+		categoriesList = (data ?? []) as CategoryOption[];
 	};
 
 	const loadProductGroups = async () => {
-		const { data, error } = await supabase
-			.from('product_groups')
-			.select('id, name')
-			.eq('active', true)
-			.order('sort_order', { ascending: true })
-			.order('name', { ascending: true });
-		if (!error && data) productGroupsList = data as ProductGroupOption[];
+		const data = await api.products.listGroups();
+		productGroupsList = (data ?? []) as ProductGroupOption[];
 	};
 
-	const loadProductGroupAssignments = async (productId: string): Promise<ProductGroupAssignment[]> => {
-		const { data, error } = await supabase
-			.from('product_product_groups')
-			.select('group_id, max_select')
-			.eq('product_id', productId);
-		if (error) return [];
+	const loadProductGroupAssignments = async (
+		productId: string,
+		signal?: AbortSignal
+	): Promise<ProductGroupAssignment[]> => {
+		const data = await api.products.listAssignments(productId, signal);
 		return (data ?? []).map((r) => ({ group_id: r.group_id, max_select: r.max_select ?? 1 }));
 	};
 
-	const LOAD_PRODUCTS_TIMEOUT_MS = 12_000;
-	const loadSupabaseProducts = async () => {
-		productsLoading = true;
-		const timeoutId = setTimeout(() => {
-			productsLoading = false;
-			toastsStore.error('La carga de productos tardó demasiado. Revisá la conexión.');
-		}, LOAD_PRODUCTS_TIMEOUT_MS);
-		try {
-			const { data, error } = await supabase
-				.from('products')
-				.select('id, name, description, price, active, image_url, product_categories(category_id, categories(id, name))')
-				.order('name', { ascending: true });
-			if (error) {
-				toastsStore.error(error.message || 'Error al cargar productos');
-				supabaseProducts = [];
-				products = [];
-			} else {
-				const list = (data ?? []) as unknown as SupabaseProduct[];
-				supabaseProducts = list;
-				products = list.filter((p) => p.active);
-			}
-		} finally {
-			clearTimeout(timeoutId);
-			productsLoading = false;
+	const fetchProductsFromSupabase = async (): Promise<SupabaseProduct[]> => {
+		const data = await api.products.list();
+		return (data ?? []) as unknown as SupabaseProduct[];
+	};
+	const clearProductsRetry = () => {
+		if (productsRetryTimeoutId) {
+			clearTimeout(productsRetryTimeoutId);
+			productsRetryTimeoutId = null;
 		}
+	};
+	const scheduleProductsRetry = () => {
+		if (productsRetryTimeoutId) return;
+		productsRetryTimeoutId = setTimeout(() => {
+			productsRetryTimeoutId = null;
+			void loadSupabaseProducts();
+		}, PRODUCTS_RETRY_MS);
+	};
+	const loadSupabaseProducts = async () => {
+		if (productsLoadInFlight) return productsLoadInFlight;
+		productsLoadInFlight = (async () => {
+		productsLoading = true;
+		productsLoadStartedAt = Date.now();
+		productsLoadError = null;
+		try {
+			const list = await fetchProductsFromSupabase();
+			supabaseProducts = list;
+			products = list.filter((p) => p.active);
+			posDataCache.set(PRODUCTS_CACHE_KEY, list);
+			clearPosSelfHealMark(PRODUCTS_SELFHEAL_SCREEN_KEY);
+			clearProductsRetry();
+		} catch (e2) {
+			const isTimeout = (e2 as Error)?.name === 'AbortError';
+			const msg =
+				isTimeout
+					? 'La carga de productos superó el tiempo de espera'
+					: e2 instanceof Error
+						? e2.message
+						: 'Error al cargar productos.';
+			productsLoadError = msg;
+			// Si ya hay datos visibles, no interrumpir con toast de error de background refresh.
+			const hasVisibleData = products.length > 0;
+			if (!hasVisibleData) toastsStore.error(msg);
+			scheduleProductsRetry();
+			// POS always-on: mantener el último estado visible, no vaciar la UI.
+		} finally {
+			productsLoading = false;
+			productsLoadInFlight = null;
+		}
+		})();
+		return productsLoadInFlight;
 	};
 
 	const storeProducts = $derived($productsState.products);
 	const selectedProduct = $derived(products.find((p) => p.id === targetProductId) ?? null);
 	const groups = $derived(targetProductId ? $productsState.getGroupsByProduct(targetProductId) : []);
-	const totalProducts = products.length;
+	const totalProducts = $derived(products.length);
 
 	// Búsqueda global por nombre, descripción y categoría(s); filtro por categoría.
 	const filteredProducts = $derived.by(() => {
@@ -291,19 +329,22 @@
 	const inactiveProductsCount = $derived(products.filter((p) => !p.active).length);
 	const allSelected = $derived(totalProducts > 0 && selectedProductIds.length === totalProducts);
 
+	const getCategoryNode = (pc: ProductCategoryLink): { id: string; name: string } | null =>
+		Array.isArray(pc.categories) ? pc.categories[0] ?? null : pc.categories;
+
 	const getProductCategoryIds = (p: SupabaseProduct): string[] =>
 		(p.product_categories ?? [])
-			.map((pc) => pc.categories?.id ?? pc.category_id)
+			.map((pc) => getCategoryNode(pc)?.id ?? pc.category_id)
 			.filter(Boolean);
 
 	const getProductCategoryNames = (p: SupabaseProduct): string =>
 		(p.product_categories ?? [])
-			.map((pc) => pc.categories?.name)
+			.map((pc) => getCategoryNode(pc)?.name)
 			.filter(Boolean)
 			.join(', ') || '—';
 
 	const getProductCategoryNamesArray = (p: SupabaseProduct): string[] =>
-		(p.product_categories ?? []).map((pc) => pc.categories?.name).filter(Boolean) as string[];
+		(p.product_categories ?? []).map((pc) => getCategoryNode(pc)?.name).filter(Boolean) as string[];
 
 	const openNewProduct = () => {
 		targetProductId = null;
@@ -349,134 +390,150 @@
 		input.value = '';
 	};
 
-	const openEditProduct = async (id: string) => {
+	const openEditProduct = (id: string) => {
 		const product = products.find((p) => p.id === id);
 		if (!product) return;
 		targetProductId = id;
 		editingProductId = id;
 		const categoryIds = 'product_categories' in product ? getProductCategoryIds(product as SupabaseProduct) : [];
 		const imageUrl = (product as SupabaseProduct).image_url?.trim() ?? '';
-		const groups = await loadProductGroupAssignments(id);
-		productForm = { name: product.name, base_price: getProductPrice(product) as number, active: product.active, image_url: imageUrl, category_ids: categoryIds, groups };
-		// Abrir el drawer en el siguiente ciclo para que bits-ui reciba el cambio
-		setTimeout(() => {
-			detailDrawerOpen = true;
-		}, 0);
+		// Abrir el drawer de inmediato con los datos que ya tenemos; los grupos se cargan en segundo plano en el $effect
+		productForm = {
+			name: product.name,
+			base_price: getProductPrice(product) as number,
+			active: product.active,
+			image_url: imageUrl,
+			category_ids: categoryIds,
+			groups: []
+		};
+		detailDrawerOpen = true;
+		// Si la lista de grupos del sistema no está cargada, cargarla para que se vean los grupos asociados al producto
+		if (productGroupsList.length === 0) {
+			void loadProductGroups();
+		}
 	};
 
+	const SAVE_TIMEOUT_MS = 70_000;
 	const saveProduct = async () => {
 		const parsed = productCreateSchema.safeParse(productForm);
 		if (!parsed.success) {
 			toastsStore.error(parsed.error.issues[0]?.message ?? 'Datos inválidos');
 			return;
 		}
-		savingProduct = true;
-		const isSupabaseProduct = editingProductId && supabaseProducts.some((p) => p.id === editingProductId);
-		if (editingProductId) {
-			if (isSupabaseProduct) {
-				const { error } = await supabase
-					.from('products')
-					.update({
-						name: parsed.data.name,
-						description: parsed.data.name,
-						price: parsed.data.base_price,
-						active: parsed.data.active,
-						image_url: productForm.image_url?.trim() || null,
-						updated_at: new Date().toISOString()
-					})
-					.eq('id', editingProductId);
-				if (error) {
-					toastsStore.error(error.message || 'Error al actualizar');
-					savingProduct = false;
-					return;
+		const timeoutId = setTimeout(() => {
+			savingProduct = false;
+			toastsStore.error('El guardado tardó demasiado. Reintentá.');
+		}, SAVE_TIMEOUT_MS);
+		try {
+			await asyncGuard(
+				async () => {
+					const isSupabaseProduct = editingProductId && supabaseProducts.some((p) => p.id === editingProductId);
+					if (editingProductId) {
+						if (isSupabaseProduct) {
+							await api.products.updateProduct(editingProductId, {
+								name: parsed.data.name,
+								description: parsed.data.name,
+								price: parsed.data.base_price,
+								active: parsed.data.active,
+								image_url: productForm.image_url?.trim() || null,
+								updated_at: new Date().toISOString()
+							});
+							await api.products.setProductCategories(editingProductId, productForm.category_ids);
+							await api.products.setProductGroups(editingProductId, productForm.groups);
+							// Actualizar lista local de inmediato (incl. image_url) para que al reabrir el editor se vea la foto
+							const imageUrl = productForm.image_url?.trim() || null;
+							products = products.map((p) =>
+								p.id === editingProductId
+									? {
+											...p,
+											name: parsed.data.name,
+											description: parsed.data.name,
+											price: parsed.data.base_price,
+											active: parsed.data.active,
+											image_url: imageUrl
+										}
+									: p
+							);
+							supabaseProducts = supabaseProducts.map((p) =>
+								p.id === editingProductId
+									? {
+											...p,
+											name: parsed.data.name,
+											description: parsed.data.name,
+											price: parsed.data.base_price,
+											active: parsed.data.active,
+											image_url: imageUrl
+										}
+									: p
+							);
+							toastsStore.success('Producto actualizado');
+							await loadSupabaseProducts();
+						} else {
+							productsStore.getState().updateProduct(editingProductId, parsed.data);
+							toastsStore.success('Producto actualizado');
+						}
+					} else {
+						// New product
+						if (useSupabase && supabaseProducts.length > 0) {
+							const inserted = await api.products.createProduct({
+								name: parsed.data.name,
+								description: parsed.data.name,
+								price: parsed.data.base_price,
+								active: parsed.data.active,
+								image_url: productForm.image_url?.trim() || null
+							});
+							const newId = inserted?.id;
+							if (newId) {
+								await api.products.setProductCategories(newId, productForm.category_ids);
+								await api.products.setProductGroups(newId, productForm.groups);
+							}
+							toastsStore.success('Producto creado');
+							await loadSupabaseProducts();
+						} else {
+							const created = productsStore.getState().createProduct(parsed.data);
+							targetProductId = created.id;
+							toastsStore.success('Producto creado');
+						}
+					}
+					detailDrawerOpen = false;
+					productDialogOpen = false;
+					editingProductId = null;
+					targetProductId = null;
+				},
+				{
+					setLoading: (value) => (savingProduct = value),
+					onError: (e) => {
+						toastsStore.error(
+							isTimeoutError(e) ? 'Guardado agotó el tiempo de espera' : 'No se pudo guardar el producto.'
+						);
+					}
 				}
-				await supabase.from('product_categories').delete().eq('product_id', editingProductId);
-				if (productForm.category_ids.length > 0) {
-					await supabase.from('product_categories').insert(
-						productForm.category_ids.map((category_id) => ({ product_id: editingProductId, category_id }))
-					);
-				}
-				await supabase.from('product_product_groups').delete().eq('product_id', editingProductId);
-				if (productForm.groups.length > 0) {
-					await supabase.from('product_product_groups').insert(
-						productForm.groups.map((g) => ({ product_id: editingProductId, group_id: g.group_id, max_select: g.max_select }))
-					);
-				}
-				// Actualizar lista local de inmediato (incl. image_url) para que al reabrir el editor se vea la foto
-				const imageUrl = productForm.image_url?.trim() || null;
-				products = products.map((p) =>
-					p.id === editingProductId
-						? { ...p, name: parsed.data.name, description: parsed.data.name, price: parsed.data.base_price, active: parsed.data.active, image_url: imageUrl }
-						: p
-				);
-				supabaseProducts = supabaseProducts.map((p) =>
-					p.id === editingProductId
-						? { ...p, name: parsed.data.name, description: parsed.data.name, price: parsed.data.base_price, active: parsed.data.active, image_url: imageUrl }
-						: p
-				);
-				toastsStore.success('Producto actualizado');
-				await loadSupabaseProducts();
-			} else {
-				productsStore.getState().updateProduct(editingProductId, parsed.data);
-				toastsStore.success('Producto actualizado');
-			}
-		} else {
-			// New product
-			if (useSupabase && supabaseProducts.length > 0) {
-				const { data: inserted, error } = await supabase
-					.from('products')
-					.insert({
-						name: parsed.data.name,
-						description: parsed.data.name,
-						price: parsed.data.base_price,
-						active: parsed.data.active,
-						image_url: productForm.image_url?.trim() || null
-					})
-					.select('id')
-					.single();
-				if (error) {
-					toastsStore.error(error.message || 'Error al crear producto');
-					savingProduct = false;
-					return;
-				}
-				const newId = inserted?.id;
-				if (newId && productForm.category_ids.length > 0) {
-					await supabase.from('product_categories').insert(
-						productForm.category_ids.map((category_id) => ({ product_id: newId, category_id }))
-					);
-				}
-				if (newId && productForm.groups.length > 0) {
-					await supabase.from('product_product_groups').insert(
-						productForm.groups.map((g) => ({ product_id: newId, group_id: g.group_id, max_select: g.max_select }))
-					);
-				}
-				toastsStore.success('Producto creado');
-				await loadSupabaseProducts();
-			} else {
-				const created = productsStore.getState().createProduct(parsed.data);
-				targetProductId = created.id;
-				toastsStore.success('Producto creado');
-			}
+			);
+		} finally {
+			clearTimeout(timeoutId);
+			savingProduct = false;
 		}
-		savingProduct = false;
-		detailDrawerOpen = false;
-		productDialogOpen = false;
-		editingProductId = null;
-		targetProductId = null;
 	};
 
 	const removeProduct = async (id: string) => {
 		if (!confirm('¿Eliminar producto? (soft delete)')) return;
 		const isSupabaseProduct = supabaseProducts.some((p) => p.id === id);
 		if (isSupabaseProduct) {
-			const { error } = await supabase.from('products').update({ active: false, updated_at: new Date().toISOString() }).eq('id', id);
-			if (error) {
-				toastsStore.error(error.message || 'Error al desactivar');
-				return;
-			}
-			toastsStore.success('Producto desactivado');
-			if (targetProductId === id) targetProductId = null;
-			await loadSupabaseProducts();
+			await asyncGuard(
+				async () => {
+					await api.products.deactivateProduct(id);
+					toastsStore.success('Producto desactivado');
+					if (targetProductId === id) targetProductId = null;
+					await loadSupabaseProducts();
+				},
+				{
+					onError: (e) => {
+						toastsStore.error(
+							isTimeoutError(e) ? 'Eliminación agotó el tiempo de espera' : 'No se pudo desactivar el producto'
+						);
+					}
+				}
+			);
 		} else {
 			productsStore.getState().deleteProduct(id);
 			if (targetProductId === id) targetProductId = null;
@@ -577,9 +634,21 @@
 
 	onMount(() => {
 		productsStore.getState().hydrate();
+		const cached = posDataCache.get<SupabaseProduct[]>(PRODUCTS_CACHE_KEY);
+		if (cached?.length) {
+			supabaseProducts = cached;
+			products = cached.filter((p) => p.active);
+			productsLoading = false;
+			productsLoadError = null;
+		}
 		void loadCategories();
 		void loadProductGroups();
 		void loadSupabaseProducts();
+		const stuckIntervalId = setInterval(() => {
+			const stuck = productsLoading && products.length === 0 && Date.now() - productsLoadStartedAt > PRODUCTS_STUCK_RELOAD_MS;
+			if (!stuck) return;
+			tryPosSelfHealReload(PRODUCTS_SELFHEAL_SCREEN_KEY);
+		}, 2_000);
 		// Restaurar estado persistido de la tabla (solo en browser).
 		if (browser) {
 			const saved = loadProductsTableState();
@@ -600,10 +669,39 @@
 			void loadCategories();
 			void loadProductGroups();
 			void loadSupabaseProducts();
+			// Si el drawer de edición está abierto, recargar grupos y asignaciones para que no quede "No hay grupos definidos"
+			if (productDrawerRef.open && productDrawerRef.editingId && productDrawerRef.useSupabase && productDrawerRef.hasProducts) {
+				void loadProductGroups();
+				loadProductGroupAssignments(productDrawerRef.editingId)
+					.then((groups) => {
+						if (productDrawerRef.open && productDrawerRef.editingId) productForm = { ...productForm, groups };
+					})
+					.catch(() => {});
+			}
 		});
 		return () => {
 			unsub();
+			clearProductsRetry();
+			clearInterval(stuckIntervalId);
 		};
+	});
+
+	// Ref para que el callback de refreshTrigger lea el estado actual del drawer
+	const productDrawerRef = { open: false, editingId: null as string | null, useSupabase: false, hasProducts: false };
+	$effect(() => {
+		productDrawerRef.open = detailDrawerOpen;
+		productDrawerRef.editingId = editingProductId;
+		productDrawerRef.useSupabase = useSupabase;
+		productDrawerRef.hasProducts = supabaseProducts.length > 0;
+	});
+
+	$effect(() => {
+		if (!detailDrawerOpen) {
+			if (drawerLoadController) {
+				drawerLoadController.abort();
+				drawerLoadController = null;
+			}
+		}
 	});
 
 	$effect(() => {
@@ -620,9 +718,22 @@
 				groups: []
 			};
 			if (useSupabase && supabaseProducts.length > 0) {
-				loadProductGroupAssignments(selectedProduct.id).then((groups) => {
-					productForm = { ...productForm, groups };
-				});
+				if (drawerLoadController) drawerLoadController.abort();
+				const controller = new AbortController();
+				drawerLoadController = controller;
+				loadProductGroupAssignments(selectedProduct.id, controller.signal)
+					.then((groups) => {
+						if (controller.signal.aborted || !detailDrawerOpen) return;
+						productForm = { ...productForm, groups };
+					})
+					.catch((e) => {
+						if (!(e instanceof Error && e.name === 'AbortError')) {
+							toastsStore.error('No se pudieron cargar los grupos del producto');
+						}
+					})
+					.finally(() => {
+						if (drawerLoadController === controller) drawerLoadController = null;
+					});
 			}
 		}
 	});
@@ -674,13 +785,25 @@
 	</div>
 
 	<section class="panel p-4">
-		{#if productsLoading}
+		{#if productsLoading && products.length === 0}
 			<p class="py-8 text-center text-sm text-slate-500 dark:text-neutral-400">Cargando…</p>
+		{:else if productsLoadError && products.length === 0}
+			<div class="py-8 text-center text-sm text-amber-600 dark:text-amber-400">
+				<p>No se pudieron cargar los productos. Reintentando automáticamente…</p>
+				<button class="btn-secondary mt-3" type="button" onclick={() => void loadSupabaseProducts()}>
+					Reintentar ahora
+				</button>
+			</div>
 		{:else if products.length === 0}
 			<p class="py-8 text-center text-sm text-slate-500 dark:text-neutral-400">
 				No hay productos. Creá uno con «+ Add New Product».
 			</p>
 		{:else}
+			{#if productsLoading}
+				<p class="mb-3 text-xs text-slate-500 dark:text-neutral-400">
+					Actualizando datos en segundo plano…
+				</p>
+			{/if}
 			<!-- Búsqueda, filtro por categoría y botón Nuevo producto -->
 			{#if browser}
 				<div class="mb-4 flex flex-wrap items-end gap-3">
