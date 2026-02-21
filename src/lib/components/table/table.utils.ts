@@ -28,6 +28,8 @@ export function getByPath(obj: Record<string, unknown>, path: string): unknown {
 /**
  * Build a single search string from a row and a list of keys (field paths or accessors).
  * Used for global search: we concatenate values from keys and check if the query is included.
+ * For string values that contain digits, we also append a digits-only version so that
+ * e.g. searching "1128939337" matches a phone stored as "11 2893 9337".
  */
 export function getRowSearchString<T>(row: T, keys: (keyof T | string)[]): string {
 	const parts: string[] = [];
@@ -35,8 +37,11 @@ export function getRowSearchString<T>(row: T, keys: (keyof T | string)[]): strin
 		const v = typeof k === 'string' && k.includes('.')
 			? getByPath(row as unknown as Record<string, unknown>, k)
 			: (row as Record<string, unknown>)[k as string];
-		if (v != null && typeof v === 'string') parts.push(v);
-		else if (v != null) parts.push(String(v));
+		if (v != null && typeof v === 'string') {
+			parts.push(v);
+			const digits = v.replace(/\D/g, '');
+			if (digits.length >= 4) parts.push(digits);
+		} else if (v != null) parts.push(String(v));
 	}
 	return parts.join(' ').toLowerCase();
 }

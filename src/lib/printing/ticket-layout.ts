@@ -71,12 +71,9 @@ export function separator(width: number = DEFAULT_WIDTH): string {
 /** Genera el texto del ticket de prueba (mismo ancho que pedidos). */
 export function demoTicketText(): string {
 	const w = DEFAULT_WIDTH;
-	const sep = separator(w);
 	const lines = [
-		sep,
 		'PEDIDO',
-		'Original',
-		sep,
+		'',
 		'ID: 3',
 		'Fecha: 13/02/2026',
 		'Hora: 20:12',
@@ -98,8 +95,7 @@ export function demoTicketText(): string {
 		'x1 - $1000',
 		'',
 		'TOTAL: $15400',
-		'Paga: MP',
-		sep
+		'Paga: MP'
 	];
 	return lines.join('\n');
 }
@@ -126,8 +122,9 @@ function orderTicketBody(order: Order, cadeteName: string, w: number): string[] 
 		'DETALLE'
 	];
 	for (const i of order.items) {
-		// Fila 1: nombre (varias líneas si es largo)
-		lines.push(...wrap(i.nameSnapshot, w));
+		// Fila 1: nombre sin " Unidad" al final (varias líneas si es largo)
+		const itemName = (i.nameSnapshot || '').replace(/\s+Unidad$/, '');
+		lines.push(...wrap(itemName, w));
 		// Fila 2: cantidad x precio unitario
 		lines.push(...wrap(`${i.qty} x ${formatMoney(i.unitPrice)}`, w));
 		// Fila 3: subtotal del ítem
@@ -136,7 +133,7 @@ function orderTicketBody(order: Order, cadeteName: string, w: number): string[] 
 	const subtotal = order.items.reduce((acc, i) => acc + i.subtotal, 0);
 	const envio = order.deliveryCost ?? (order.total > subtotal ? order.total - subtotal : 0);
 	lines.push('');
-	lines.push(...wrap(`SUBTOTAL DEL PEDIDO: ${formatMoney(subtotal)}`, w));
+	lines.push(...wrap(`SUBTOTAL: ${formatMoney(subtotal)}`, w));
 	if (envio > 0) {
 		lines.push(...wrap(`ENVIO: ${formatMoney(envio)}`, w));
 	}
@@ -150,7 +147,6 @@ function orderTicketBody(order: Order, cadeteName: string, w: number): string[] 
 		lines.push(...wrap(`Vuelto: ${formatMoney(order.changeDue)}`, w));
 	}
 	lines.push('');
-	lines.push('GRACIAS POR SU COMPRA');
 	return lines;
 }
 
@@ -158,20 +154,13 @@ function orderTicketBody(order: Order, cadeteName: string, w: number): string[] 
 export function orderToTicketText(
 	order: Order,
 	cadeteName: string,
-	variant: TicketVariant = 'original'
+	_variant: TicketVariant = 'original'
 ): string {
 	const w = DEFAULT_WIDTH;
-	const sep = separator(w);
-	const subtitulo = variant === 'original' ? 'Original' : 'Duplicado';
 	const lines: string[] = [
-		sep,
 		'PEDIDO',
-		subtitulo,
-		sep,
 		'',
-		...orderTicketBody(order, cadeteName, w),
-		'',
-		sep
+		...orderTicketBody(order, cadeteName, w)
 	];
 	return lines.join('\n');
 }

@@ -272,6 +272,9 @@ for insert to authenticated with check (true);
 drop policy if exists "crud customers authenticated" on public.customers;
 create policy "crud customers authenticated" on public.customers
 for all to authenticated using (true) with check (true);
+-- Lectura para anon: evita lista vacía si la petición va sin JWT (ej. sesión no adjunta).
+drop policy if exists "customers select anon" on public.customers;
+create policy "customers select anon" on public.customers for select to anon using (true);
 
 drop policy if exists "staff_guests select anon" on public.staff_guests;
 create policy "staff_guests select anon" on public.staff_guests for select to anon using (true);

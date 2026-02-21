@@ -16,6 +16,9 @@ export interface GlobalSearchConfig<TData> {
 	placeholder?: string;
 	keys: (keyof TData | string)[];
 	debounceMs?: number;
+	/** Si se pasan value y onChange, la búsqueda es controlada: el padre filtra los datos y la tabla no aplica filtro interno. */
+	value?: string;
+	onChange?: (value: string) => void;
 }
 
 export type DataTableFilterType = 'chips' | 'date' | 'select';
@@ -90,6 +93,8 @@ export interface DataTableProps<TData> {
 	loading?: boolean;
 	emptyMessage?: string;
 	persistState?: boolean;
+	/** Contenido a la izquierda de la barra de herramientas (ej. buscador). */
+	toolbarLeft?: Snippet;
 	/** Contenido extra en la barra de herramientas (a la izquierda de Columnas). */
 	toolbarActions?: Snippet;
 }

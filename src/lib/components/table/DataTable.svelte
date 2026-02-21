@@ -40,6 +40,7 @@
 		loading = false,
 		emptyMessage = 'Sin resultados',
 		persistState = true,
+		toolbarLeft,
 		toolbarActions
 	}: Props = $props();
 
@@ -85,12 +86,16 @@
 
 	const debounceMs = globalSearch?.debounceMs ?? 200;
 
-	// Apply external filters (chips, date, select) and global search in one pass over data
+	const isControlledSearch = $derived(
+		globalSearch != null && globalSearch.value !== undefined && globalSearch.onChange != null
+	);
+
+	// Apply external filters (chips, date, select) and global search in one pass over data (skip search when controlled)
 	const filteredData = $derived.by(() => {
 		let rows = Array.isArray(data) ? data : [];
-		const q = String(globalSearchInput).trim();
-		if (globalSearch && q) {
-			rows = applyGlobalSearch(rows, q, globalSearch.keys);
+		if (!isControlledSearch && globalSearch) {
+			const q = String(globalSearchInput).trim();
+			if (q) rows = applyGlobalSearch(rows, q, globalSearch.keys);
 		}
 		for (const f of filters) {
 			const v = filterValues[f.id];
@@ -250,18 +255,27 @@
 		<h2 class="text-lg font-semibold text-slate-800 dark:text-neutral-200">{title}</h2>
 	{/if}
 
-	<div class="flex flex-wrap items-center gap-3">
-		{#if globalSearch}
+	<div class="flex flex-wrap items-center justify-between gap-3">
+		{#if toolbarLeft}
+			<div class="flex min-w-0 flex-1 items-center gap-2">
+				{@render toolbarLeft()}
+			</div>
+		{/if}
+		{#if globalSearch && !toolbarLeft}
 			<input
 				type="search"
 				class="input max-w-xs"
 				placeholder={globalSearch.placeholder ?? 'Buscar…'}
 				aria-label="Buscar en la tabla"
-				value={globalSearchInput}
+				value={isControlledSearch ? (globalSearch.value ?? '') : globalSearchInput}
 				oninput={(e) => {
 					const v = (e.currentTarget as HTMLInputElement).value;
-					globalSearchInput = v;
-					setGlobalSearch(v);
+					if (isControlledSearch && globalSearch.onChange) {
+						globalSearch.onChange(v);
+					} else {
+						globalSearchInput = v;
+						setGlobalSearch(v);
+					}
 				}}
 			/>
 		{/if}

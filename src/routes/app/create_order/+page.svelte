@@ -9,7 +9,7 @@
 	import { customerSchema } from '$lib/schemas';
 	import { businessStore } from '$lib/stores/business';
 	import { catalogStore } from '$lib/stores/catalog';
-	import { customersStore } from '$lib/stores/customers';
+	import { customersStore, customersStatus } from '$lib/stores/customers';
 	import { ordersStore } from '$lib/stores/orders';
 	import { productsStore } from '$lib/stores/productsStore';
 	import { sessionStore } from '$lib/stores/session';
@@ -60,12 +60,25 @@
 	let productsViewMode = $state<'cards' | 'list'>('cards');
 	let clientModalOpen = $state(false);
 	let clientCardMenuOpen = $state(false);
+	/** Modal editar cliente desde el POS (no ir a /clients) */
+	let editClientModalOpen = $state(false);
+	let editClientCustomer = $state<Customer | null>(null);
+	let editClientForm = $state({ phone: '', address: '', betweenStreets: '', notes: '' });
+	let editClientSaving = $state(false);
 	/** true = cambiar cliente del draft actual; false = crear nuevo draft con el cliente */
 	let clientModalForChange = $state(false);
 	/** true = acabo de elegir cliente, guardando y mostrando la nueva card antes de cerrar */
 	let clientModalSaving = $state(false);
 	let clientSearch = $state('');
 	let addClientMode = $state(false);
+	/** Resultados de búsqueda por API cuando la lista filtrada está vacía (teléfono, dirección o texto) */
+	let lookupSearchResults = $state<Customer[]>([]);
+	let lookupSearchLoading = $state(false);
+	let lookupSearchFor = $state('');
+	/** En formulario "Agregar cliente nuevo": cliente existente encontrado por búsqueda directa por teléfono */
+	let existingCustomerByPhoneLookup = $state<Customer | null>(null);
+	let existingCustomerByPhoneLookupLoading = $state(false);
+	let existingCustomerByPhoneLookupFor = $state('');
 	let newClientForm = $state({ phone: '', address: '', betweenStreets: '', notes: '' });
 	let configOpen = $state(false);
 	let configLoading = $state(false);
@@ -301,24 +314,121 @@
 		$customersStore.find((c) => c.id === draft.selectedCustomerId) ?? null;
 	const draftTotal = (draft: OrderDraft) => draft.cart.reduce((acc, item) => acc + item.subtotal, 0);
 
-	const filteredClients = $derived(
-		$customersStore.filter((c) => {
-			const q = clientSearch.trim().toLowerCase();
-			if (!q) return true;
+	const filteredClients = $derived.by(() => {
+		const list = Array.isArray($customersStore) ? $customersStore : [];
+		const q = String(clientSearch ?? '').trim().toLowerCase();
+		if (!q) return list;
+		const qDigits = q.replace(/\D/g, '');
+		return list.filter((c) => {
+			const phone = String(c.phone ?? '');
+			const phoneDigits = phone.replace(/\D/g, '');
+			const addr = String(c.address ?? '').toLowerCase();
+			const between = String(c.betweenStreets ?? '').toLowerCase();
+			const notes = String(c.notes ?? '').toLowerCase();
 			return (
-				c.phone.toLowerCase().includes(q) ||
-				c.address.toLowerCase().includes(q) ||
-				(c.betweenStreets ?? '').toLowerCase().includes(q)
+				phone.toLowerCase().includes(q) ||
+				(qDigits.length >= 4 && (phoneDigits.includes(qDigits) || phoneDigits === qDigits)) ||
+				addr.includes(q) ||
+				between.includes(q) ||
+				notes.includes(q)
 			);
-		})
-	);
+		});
+	});
 
-	/** Cliente existente con el mismo teléfono al agregar uno nuevo */
+	/** Cliente existente con el mismo teléfono al agregar uno nuevo (de la lista en memoria) */
 	const existingCustomerWithPhone = $derived(
 		newClientForm.phone.replace(/\D/g, '').length >= 6
 			? $customersStore.find((c) => c.phone.replace(/\D/g, '') === newClientForm.phone.replace(/\D/g, ''))
 			: null
 	);
+
+	/** Cliente existente al agregar uno nuevo: de la lista O búsqueda directa por teléfono (para no permitir duplicados) */
+	const existingCustomerWhenAdding = $derived(existingCustomerWithPhone ?? existingCustomerByPhoneLookup);
+
+	/** Si la lista filtrada está vacía y el usuario escribió 2+ caracteres, buscar por API (teléfono, dirección o texto) */
+	let lookupSearchTimeoutId: ReturnType<typeof setTimeout> | null = null;
+	$effect(() => {
+		if (!clientModalOpen || addClientMode) return;
+		const q = String(clientSearch ?? '').trim();
+		const noResults = filteredClients.length === 0;
+		if (!noResults || q.length < 2) {
+			if (lookupSearchTimeoutId) clearTimeout(lookupSearchTimeoutId);
+			lookupSearchTimeoutId = null;
+			lookupSearchResults = [];
+			lookupSearchLoading = false;
+			lookupSearchFor = '';
+			return;
+		}
+		if (lookupSearchFor === q) return;
+		if (lookupSearchTimeoutId) clearTimeout(lookupSearchTimeoutId);
+		lookupSearchTimeoutId = setTimeout(() => {
+			lookupSearchTimeoutId = null;
+			lookupSearchFor = q;
+			lookupSearchResults = [];
+			lookupSearchLoading = true;
+			api.customers
+				.search(q)
+				.then((list) => {
+					if (lookupSearchFor === q) lookupSearchResults = list ?? [];
+				})
+				.catch(() => {
+					if (lookupSearchFor === q) lookupSearchResults = [];
+				})
+				.finally(() => {
+					if (lookupSearchFor === q) lookupSearchLoading = false;
+				});
+		}, 350);
+		return () => {
+			if (lookupSearchTimeoutId) clearTimeout(lookupSearchTimeoutId);
+		};
+	});
+
+	/** Lista a mostrar en el modal: la filtrada en memoria o los resultados de búsqueda por API si la lista está vacía */
+	const clientsToShow = $derived(
+		filteredClients.length > 0 ? filteredClients : lookupSearchResults
+	);
+
+	/** En formulario "Agregar cliente nuevo": si el teléfono tiene 6+ dígitos, comprobar por API si ya existe (aunque no esté en la lista) */
+	let existingLookupTimeoutId: ReturnType<typeof setTimeout> | null = null;
+	$effect(() => {
+		if (!clientModalOpen || !addClientMode) {
+			existingCustomerByPhoneLookup = null;
+			existingCustomerByPhoneLookupLoading = false;
+			existingCustomerByPhoneLookupFor = '';
+			if (existingLookupTimeoutId) clearTimeout(existingLookupTimeoutId);
+			existingLookupTimeoutId = null;
+			return;
+		}
+		const digits = String(newClientForm.phone ?? '').replace(/\D/g, '');
+		if (digits.length < 6) {
+			existingCustomerByPhoneLookup = null;
+			existingCustomerByPhoneLookupLoading = false;
+			existingCustomerByPhoneLookupFor = '';
+			return;
+		}
+		if (existingCustomerByPhoneLookupFor === digits) return;
+		if (existingLookupTimeoutId) clearTimeout(existingLookupTimeoutId);
+		existingLookupTimeoutId = setTimeout(() => {
+			existingLookupTimeoutId = null;
+			existingCustomerByPhoneLookupFor = digits;
+			existingCustomerByPhoneLookup = null;
+			existingCustomerByPhoneLookupLoading = true;
+			api.customers
+				.findByPhone(newClientForm.phone.trim() || digits)
+				.then((customer) => {
+					if (existingCustomerByPhoneLookupFor === digits) existingCustomerByPhoneLookup = customer;
+				})
+				.catch(() => {
+					if (existingCustomerByPhoneLookupFor === digits) existingCustomerByPhoneLookup = null;
+				})
+				.finally(() => {
+					if (existingCustomerByPhoneLookupFor === digits) existingCustomerByPhoneLookupLoading = false;
+				});
+		}, 400);
+		return () => {
+			if (existingLookupTimeoutId) clearTimeout(existingLookupTimeoutId);
+		};
+	});
 
 	/** Agregar un nuevo borrador (sin cliente) para tener varios pedidos en paralelo */
 	const addNewDraft = () => {
@@ -332,13 +442,22 @@
 	const openClientModal = (forChange = false) => {
 		clientSearch = '';
 		addClientMode = false;
+		lookupSearchResults = [];
+		lookupSearchLoading = false;
+		lookupSearchFor = '';
+		existingCustomerByPhoneLookup = null;
+		existingCustomerByPhoneLookupLoading = false;
+		existingCustomerByPhoneLookupFor = '';
 		clientModalForChange = forChange;
 		newClientForm = { phone: '', address: '', betweenStreets: '', notes: '' };
 		clientModalOpen = true;
+		// Recargar lista de clientes al abrir para no depender de cache vacío o desactualizado
+		void customersStore.revalidate();
 	};
 
 	const selectClient = async (customer: Customer) => {
-		if (clientModalForChange && activeDraft) {
+		// Asignar cliente al borrador actual (cambio de cliente o borrador sin cliente)
+		if ((clientModalForChange || (activeDraft && !activeDraft.selectedCustomerId)) && activeDraft) {
 			const updater = (draft: OrderDraft) => ({
 				...draft,
 				selectedCustomerId: customer.id,
@@ -357,8 +476,10 @@
 			}
 			clientModalOpen = false;
 			clientModalForChange = false;
+			addClientMode = false;
 			return;
 		}
+		// Crear nuevo borrador con este cliente
 		clientModalSaving = true;
 		try {
 			draftCount += 1;
@@ -417,7 +538,7 @@
 	};
 
 	const addNewClient = async () => {
-		if (existingCustomerWithPhone) {
+		if (existingCustomerWhenAdding) {
 			toastsStore.error('Ya existe un cliente con este teléfono. Usá el botón «Usar este cliente».');
 			return;
 		}
@@ -426,12 +547,63 @@
 			toastsStore.error(parsed.error.issues[0]?.message ?? 'Datos inválidos');
 			return;
 		}
+		clientModalSaving = true;
 		try {
 			const created = await customersStore.create(parsed.data);
 			toastsStore.success('Cliente creado');
 			selectClient(created);
-		} catch {
-			toastsStore.error('No se pudo crear el cliente');
+		} catch (e) {
+			const err = e as Error & { message?: string };
+			toastsStore.error(err?.message?.trim() ? err.message : 'No se pudo crear el cliente');
+		} finally {
+			clientModalSaving = false;
+		}
+	};
+
+	const openEditClientInPos = (customer: Customer) => {
+		clientCardMenuOpen = false;
+		editClientCustomer = customer;
+		editClientForm = {
+			phone: customer.phone,
+			address: customer.address,
+			betweenStreets: customer.betweenStreets ?? '',
+			notes: customer.notes ?? ''
+		};
+		editClientModalOpen = true;
+	};
+
+	const saveEditClientInPos = async () => {
+		if (!editClientCustomer || !activeDraft) return;
+		const parsed = customerSchema.safeParse(editClientForm);
+		if (!parsed.success) {
+			toastsStore.error(parsed.error.issues[0]?.message ?? 'Datos inválidos');
+			return;
+		}
+		editClientSaving = true;
+		try {
+			await customersStore.update(editClientCustomer.id, parsed.data);
+			toastsStore.success('Cliente actualizado');
+			const updater = (draft: OrderDraft) => ({
+				...draft,
+				customerPhoneSnapshot: parsed.data.phone,
+				addressSnapshot: parsed.data.address,
+				betweenStreetsSnapshot: parsed.data.betweenStreets
+			});
+			updateActiveDraft(updater);
+			if (activeDraft.orderId) {
+				await ordersStore.update(activeDraft.orderId, {
+					customerPhoneSnapshot: parsed.data.phone,
+					addressSnapshot: parsed.data.address,
+					betweenStreetsSnapshot: parsed.data.betweenStreets
+				});
+			}
+			editClientModalOpen = false;
+			editClientCustomer = null;
+		} catch (e) {
+			const err = e as Error & { message?: string };
+			toastsStore.error(err?.message?.trim() ? err.message : 'No se pudo actualizar el cliente');
+		} finally {
+			editClientSaving = false;
 		}
 	};
 	const qtyBySku = (skuId: string) => activeDraft?.cart.find((item) => item.skuId === skuId)?.qty ?? 0;
@@ -1076,9 +1248,9 @@
 								}}
 							>
 								<div class="min-w-0 flex-1 pr-6">
-									<p class="truncate text-sm font-semibold {isActive ? 'text-white dark:text-slate-900' : ''}">{draftCustomer(draft)?.phone ?? '—'}</p>
+									<p class="truncate text-sm font-semibold {isActive ? 'text-white dark:text-slate-900' : ''}">{draftCustomer(draft)?.phone ?? draft.customerPhoneSnapshot ?? '—'}</p>
 									<p class="mt-0.5 line-clamp-2 text-xs leading-tight {isActive ? 'text-slate-300 dark:text-slate-600' : 'text-slate-500 dark:text-slate-400'}">
-										{draftCustomer(draft)?.address ?? 'Sin dirección'}
+										{draftCustomer(draft)?.address ?? draft.addressSnapshot ?? 'Sin dirección'}
 									</p>
 								</div>
 								<div class="mt-0.5 flex w-full items-center justify-end">
@@ -1189,7 +1361,7 @@
 			</div>
 
 			{#if productsViewMode === 'cards'}
-				<div class="grid grid-cols-2 gap-3 sm:grid-cols-[repeat(auto-fill,minmax(10rem,1fr))]">
+				<div class="grid grid-cols-2 gap-3 sm:grid-cols-[repeat(auto-fill,minmax(10rem,1fr))] xl:grid-cols-5">
 					{#each products as product}
 						{#each findSkusByProduct(product.id) as sku}
 							<div class="relative aspect-square w-full overflow-hidden rounded-2xl border border-slate-200 shadow-sm dark:border-slate-600">
@@ -1198,35 +1370,36 @@
 									src={product.imageUrl ?? `https://placehold.co/400x533?text=${encodeURIComponent(product.name.slice(0, 12))}`}
 									alt={product.name}
 								/>
-								<!-- Degradado + título, precio y selector sobre la imagen -->
-								<div class="absolute inset-x-0 bottom-0 flex flex-col gap-1.5 px-3 pb-3 pt-10 bg-gradient-to-t from-black/90 via-black/50 to-transparent">
+								<!-- Degradado arriba: título y debajo el precio (izquierda) -->
+								<div class="absolute inset-x-0 top-0 flex flex-col gap-1 px-3 pt-3 pb-16 bg-gradient-to-b from-black/90 via-black/40 to-transparent text-left">
 									<p class="line-clamp-2 text-xs font-bold uppercase tracking-wide text-white drop-shadow-sm">
 										{product.name}
 									</p>
-									<div class="flex min-w-0 items-center justify-between gap-2">
-										<span class="min-w-0 truncate text-sm font-semibold text-white drop-shadow-sm">{formatMoney(sku.price)}</span>
-										<div class="shrink-0 inline-flex overflow-hidden rounded-lg border border-white/30 bg-white/20 backdrop-blur-sm">
-											<button
-												type="button"
-												class="flex h-7 w-6 shrink-0 items-center justify-center text-white transition-opacity hover:bg-white/20"
-												aria-label="Restar"
-												onclick={() => decSku(sku)}
-											>
-												<span class="text-sm font-medium leading-none">−</span>
-											</button>
-											<span class="flex min-w-[1.5rem] items-center justify-center border-x border-white/30 px-0.5 text-xs font-bold text-white">
-												{qtyBySku(sku.id)}
-											</span>
-											<button
-												type="button"
-												class="flex h-7 w-6 shrink-0 items-center justify-center text-white transition-opacity hover:bg-white/20 disabled:opacity-50"
-												aria-label="Sumar"
-												disabled={configLoading}
-												onclick={() => void openConfig(sku, product)}
-											>
-												<span class="text-sm font-medium leading-none">+</span>
-											</button>
-										</div>
+									<span class="text-sm font-semibold text-white drop-shadow-sm">{formatMoney(sku.price)}</span>
+								</div>
+								<!-- Abajo a la derecha: selector +/- -->
+								<div class="absolute inset-x-0 bottom-0 flex items-center justify-end px-3 pb-3">
+									<div class="shrink-0 inline-flex overflow-hidden rounded-lg border border-white/25 bg-black/65 backdrop-blur-sm">
+										<button
+											type="button"
+											class="flex h-7 w-6 shrink-0 items-center justify-center text-white transition-opacity hover:bg-white/20"
+											aria-label="Restar"
+											onclick={() => decSku(sku)}
+										>
+											<span class="text-sm font-medium leading-none">−</span>
+										</button>
+										<span class="flex min-w-[1.5rem] items-center justify-center border-x border-white/25 px-0.5 text-xs font-bold text-white">
+											{qtyBySku(sku.id)}
+										</span>
+										<button
+											type="button"
+											class="flex h-7 w-6 shrink-0 items-center justify-center text-white transition-opacity hover:bg-white/20 disabled:opacity-50"
+											aria-label="Sumar"
+											disabled={configLoading}
+											onclick={() => void openConfig(sku, product)}
+										>
+											<span class="text-sm font-medium leading-none">+</span>
+										</button>
 									</div>
 								</div>
 							</div>
@@ -1327,10 +1500,7 @@
 						type="button"
 						class="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-neutral-700"
 						role="menuitem"
-						onclick={() => {
-							clientCardMenuOpen = false;
-							goto(`/app/clients?editId=${encodeURIComponent(selectedCustomer.id)}`);
-						}}
+						onclick={() => openEditClientInPos(selectedCustomer)}
 					>
 						Editar cliente
 					</button>
@@ -1351,7 +1521,7 @@
 				{#each activeDraft?.cart ?? [] as item}
 					<div class="rounded-lg border border-slate-200 p-2 dark:border-slate-700">
 						<div class="flex items-center justify-between gap-2">
-							<p class="text-sm font-medium">{item.nameSnapshot}</p>
+							<p class="text-sm font-medium">{(item.nameSnapshot || '').replace(/\s+Unidad$/, '')}</p>
 							<p class="text-sm">{formatMoney(item.subtotal)}</p>
 						</div>
 						<div class="mt-2 flex items-center gap-2">
@@ -1487,7 +1657,7 @@
 						{#if configGroups.length > 1}
 							<p class="mb-2 text-sm font-medium text-slate-600 dark:text-slate-400">{group.name} {totalQtyForGroup(group.id)}/{group.max_select}</p>
 						{/if}
-						<div class="grid grid-cols-7 gap-2">
+						<div class="grid grid-cols-8 gap-2">
 							{#each getConfigOptions(group.id) as opt}
 								{@const isSelected = (selectionsByGroup[group.id] ?? []).includes(opt.id)}
 								<div
@@ -1573,7 +1743,7 @@
 											</p>
 											{#if configOptionCategoryName[opt.id]}
 												<span
-													class="inline-block w-fit shrink-0 rounded-full px-2 py-0.5 text-[10px] leading-none {getCategoryChipClass(configOptionCategoryName[opt.id])}"
+													class="inline-block max-w-full shrink-0 truncate rounded-full px-2 py-0.5 text-[8px] leading-none whitespace-nowrap {getCategoryChipClass(configOptionCategoryName[opt.id])}"
 												>
 													{configOptionCategoryName[opt.id]}
 												</span>
@@ -1647,16 +1817,18 @@
 						<span class="mb-1 block text-sm text-slate-600 dark:text-slate-400">Observación (opcional)</span>
 						<input class="input w-full" type="text" bind:value={newClientForm.notes} placeholder="Referencias" />
 					</label>
-					{#if existingCustomerWithPhone}
+					{#if existingCustomerByPhoneLookupLoading && !existingCustomerWhenAdding}
+						<p class="text-sm text-slate-500 dark:text-slate-400">Comprobando si el teléfono ya existe…</p>
+					{:else if existingCustomerWhenAdding}
 						<div class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
 							<p class="font-medium">Este cliente ya existe</p>
 							<p class="mt-1 text-xs opacity-90">
-								Tel: {existingCustomerWithPhone.phone} — {existingCustomerWithPhone.address}
+								Tel: {existingCustomerWhenAdding.phone} — {existingCustomerWhenAdding.address}
 							</p>
 							<button
 								type="button"
 								class="btn-primary mt-2 w-full"
-								onclick={() => selectClient(existingCustomerWithPhone)}
+								onclick={() => selectClient(existingCustomerWhenAdding)}
 							>
 								Usar este cliente
 							</button>
@@ -1670,9 +1842,9 @@
 							type="button"
 							class="btn-primary flex-1"
 							onclick={addNewClient}
-							disabled={!!existingCustomerWithPhone}
+							disabled={!!existingCustomerWhenAdding || clientModalSaving}
 						>
-							Crear y usar
+							{clientModalSaving ? 'Guardando…' : 'Crear y usar'}
 						</button>
 					</div>
 				</div>
@@ -1686,26 +1858,49 @@
 						aria-label="Buscar cliente"
 					/>
 					<div class="max-h-64 space-y-1 overflow-y-auto rounded-lg border border-slate-200 dark:border-neutral-700">
-						{#each filteredClients as customer}
-							<button
-								type="button"
-								class="w-full rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-slate-100 dark:hover:bg-neutral-800"
-								onclick={() => selectClient(customer)}
-							>
-								<p class="font-medium">{customer.phone}</p>
-								<p class="text-xs text-slate-500 dark:text-slate-400">{customer.address}</p>
-								{#if customer.betweenStreets?.trim()}
-									<p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">Entre calles: {customer.betweenStreets.trim()}</p>
-								{/if}
-								{#if customer.notes?.trim()}
-									<p class="mt-0.5 line-clamp-2 text-xs text-slate-500 dark:text-slate-400">Obs: {customer.notes.trim()}</p>
-								{/if}
-							</button>
-						{/each}
-						{#if filteredClients.length === 0}
+						{#if ($customersStatus === 'loading' || $customersStatus === 'refreshing') && $customersStore.length === 0}
 							<p class="px-3 py-4 text-center text-sm text-slate-500 dark:text-slate-400">
-								Ningún cliente coincide. Agregá uno nuevo.
+								Cargando clientes…
 							</p>
+						{:else if lookupSearchLoading && clientsToShow.length === 0}
+							<p class="px-3 py-4 text-center text-sm text-slate-500 dark:text-slate-400">
+								Buscando…
+							</p>
+						{:else}
+							{#each clientsToShow as customer}
+								<button
+									type="button"
+									class="w-full rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-slate-100 dark:hover:bg-neutral-800"
+									onclick={() => selectClient(customer)}
+								>
+									<p class="font-medium">{customer.phone}</p>
+									<p class="text-xs text-slate-500 dark:text-slate-400">{customer.address}</p>
+									{#if customer.betweenStreets?.trim()}
+										<p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">Entre calles: {customer.betweenStreets.trim()}</p>
+									{/if}
+									{#if customer.notes?.trim()}
+										<p class="mt-0.5 line-clamp-2 text-xs text-slate-500 dark:text-slate-400">Obs: {customer.notes.trim()}</p>
+									{/if}
+								</button>
+							{/each}
+							{#if clientsToShow.length === 0}
+								{#if $customersStore.length === 0 && ($customersStatus === 'idle' || $customersStatus === 'error')}
+									<div class="px-3 py-4 text-center text-sm text-slate-500 dark:text-slate-400">
+										<p>No se cargaron los clientes.</p>
+										<button
+											type="button"
+											class="btn-secondary mt-2 !py-1.5 text-xs"
+											onclick={() => void customersStore.revalidate()}
+										>
+											Reintentar
+										</button>
+									</div>
+								{:else}
+									<p class="px-3 py-4 text-center text-sm text-slate-500 dark:text-slate-400">
+										Ningún cliente coincide. Agregá uno nuevo.
+									</p>
+								{/if}
+							{/if}
 						{/if}
 					</div>
 					<button type="button" class="btn-secondary w-full" onclick={() => (addClientMode = true)}>
@@ -1716,6 +1911,76 @@
 			<div class="mt-4 flex justify-end">
 				<Dialog.Close class="btn-secondary" disabled={clientModalSaving}>Cerrar</Dialog.Close>
 			</div>
+		</Dialog.Content>
+	</Dialog.Portal>
+</Dialog.Root>
+
+<Dialog.Root
+	open={editClientModalOpen}
+	onOpenChange={(open) => {
+		editClientModalOpen = open;
+		if (!open) editClientCustomer = null;
+	}}
+>
+	<Dialog.Portal>
+		<Dialog.Overlay class="fixed inset-0 z-40 bg-black/50" />
+		<Dialog.Content
+			class="fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border border-slate-200 bg-white p-4 shadow-xl dark:border-neutral-700 dark:bg-black"
+			aria-describedby="edit-client-modal-desc"
+			aria-labelledby="edit-client-modal-title"
+		>
+			<h2 id="edit-client-modal-title" class="mb-4 text-lg font-semibold">Editar cliente</h2>
+			{#if editClientSaving}
+				<div id="edit-client-modal-desc" class="flex flex-col items-center justify-center gap-3 py-8">
+					<div class="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-blue-600 dark:border-neutral-600 dark:border-t-blue-400" aria-hidden="true"></div>
+					<p class="text-sm text-slate-600 dark:text-slate-400">Guardando…</p>
+				</div>
+			{:else}
+				<div id="edit-client-modal-desc" class="space-y-3">
+					<label class="block">
+						<span class="mb-1 block text-sm text-slate-600 dark:text-slate-400">Teléfono</span>
+						<input
+							class="input w-full"
+							type="tel"
+							inputmode="numeric"
+							pattern="[0-9]*"
+							placeholder="Solo números"
+							value={editClientForm.phone}
+							onkeydown={(e) => {
+								if (e.key === 'Backspace' || e.key === 'Delete' || e.key === 'Tab' || e.key.startsWith('Arrow') || (e.ctrlKey || e.metaKey) && ['a', 'c', 'v', 'x'].includes(e.key.toLowerCase())) return;
+								if (!/^\d$/.test(e.key)) e.preventDefault();
+							}}
+							oninput={(e) => {
+								const v = (e.currentTarget as HTMLInputElement).value.replace(/\D/g, '');
+								editClientForm = { ...editClientForm, phone: v };
+							}}
+						/>
+					</label>
+					<label class="block">
+						<span class="mb-1 block text-sm text-slate-600 dark:text-slate-400">Dirección</span>
+						<input class="input w-full" type="text" bind:value={editClientForm.address} placeholder="Calle y número" />
+					</label>
+					<label class="block">
+						<span class="mb-1 block text-sm text-slate-600 dark:text-slate-400">Entre calles (opcional)</span>
+						<input class="input w-full" type="text" bind:value={editClientForm.betweenStreets} placeholder="Ej: Av. X y Calle Y" />
+					</label>
+					<label class="block">
+						<span class="mb-1 block text-sm text-slate-600 dark:text-slate-400">Observación (opcional)</span>
+						<input class="input w-full" type="text" bind:value={editClientForm.notes} placeholder="Referencias" />
+					</label>
+					<div class="flex gap-2 pt-2">
+						<Dialog.Close class="btn-secondary flex-1" disabled={editClientSaving}>Cancelar</Dialog.Close>
+						<button
+							type="button"
+							class="btn-primary flex-1"
+							onclick={() => saveEditClientInPos()}
+							disabled={editClientSaving}
+						>
+							Guardar
+						</button>
+					</div>
+				</div>
+			{/if}
 		</Dialog.Content>
 	</Dialog.Portal>
 </Dialog.Root>

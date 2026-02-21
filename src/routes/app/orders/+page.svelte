@@ -525,7 +525,14 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 			w.document.write(html);
 			w.document.close();
 			w.focus();
-			w.onload = () => w.print();
+			// Tras document.write/close, onload no siempre se dispara; setTimeout asegura que se abra el diálogo de impresión
+			setTimeout(() => {
+				try {
+					w.print();
+				} catch {
+					// ignorar si la ventana se cerró
+				}
+			}, 150);
 		}
 	}
 
