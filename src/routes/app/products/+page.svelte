@@ -726,20 +726,32 @@
 				if (drawerLoadController) drawerLoadController.abort();
 				const controller = new AbortController();
 				drawerLoadController = controller;
-				loadProductGroupAssignments(selectedProduct.id, controller.signal)
-					.then((groups) => {
-						if (controller.signal.aborted || !detailDrawerOpen) return;
-						productForm = { ...productForm, groups };
-					})
-					.catch((e) => {
-						if (!(e instanceof Error && e.name === 'AbortError')) {
+				const productId = selectedProduct.id;
+				const tryLoad = (isRetry = false) => {
+					loadProductGroupAssignments(productId, controller.signal)
+						.then((groups) => {
+							if (controller.signal.aborted || !detailDrawerOpen) return;
+							productForm = { ...productForm, groups };
+							groupsAssignmentsLoadError = false;
+						})
+						.catch((e) => {
+							if (e instanceof Error && e.name === 'AbortError') return;
+							if (!isRetry) {
+								// Un único reintento automático antes de mostrar error
+								setTimeout(() => {
+									if (controller.signal.aborted || !detailDrawerOpen) return;
+									tryLoad(true);
+								}, 400);
+								return;
+							}
 							groupsAssignmentsLoadError = true;
-							toastsStore.error('No se pudieron cargar los grupos del producto');
-						}
-					})
-					.finally(() => {
-						if (drawerLoadController === controller) drawerLoadController = null;
-					});
+							// Sin toast: el drawer ya muestra el mensaje con Reintentar
+						})
+						.finally(() => {
+							if (drawerLoadController === controller) drawerLoadController = null;
+						});
+				};
+				tryLoad(false);
 			}
 		}
 	});
@@ -754,7 +766,8 @@
 			})
 			.catch(() => {
 				groupsAssignmentsLoadError = true;
-				toastsStore.error('No se pudieron cargar los grupos del producto');
+				// El drawer ya muestra el mensaje; solo toast si el usuario hizo clic en Reintentar
+				toastsStore.error('Sigue sin poder cargar los grupos. Revisá la conexión.');
 			});
 	};
 
