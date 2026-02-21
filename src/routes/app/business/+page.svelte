@@ -281,10 +281,22 @@
 		}
 	};
 
-	onMount(async () => {
-		await businessStore.load();
-		const id = $businessStore.id;
-		if (id) await loadAddresses(id);
+	onMount(() => {
+		if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:business] mount start');
+		void (async () => {
+			try {
+				await businessStore.load();
+				const id = $businessStore.id;
+				if (id) await loadAddresses(id);
+			} catch (e) {
+				if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:business] mount error', e);
+			} finally {
+				if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:business] mount end');
+			}
+		})();
+		return () => {
+			if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:business] cleanup');
+		};
 	});
 </script>
 

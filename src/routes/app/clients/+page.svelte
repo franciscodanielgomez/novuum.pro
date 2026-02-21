@@ -340,15 +340,25 @@
 	};
 
 	onMount(() => {
+		let alive = true;
 		loadStartedAt = Date.now();
-		void customersStore.load().then(() => {
-			const editId = $page.url.searchParams.get('editId');
-			if (editId) {
-				const customer = $customersStore.find((c) => c.id === editId);
-				if (customer) openEdit(customer);
-				void goto('/app/clients', { replaceState: true });
+		if (browser && import.meta.env.DEV) console.debug('[route:clients] mount start');
+		void (async () => {
+			try {
+				await customersStore.load();
+				if (!alive) return;
+				const editId = $page.url.searchParams.get('editId');
+				if (editId) {
+					const customer = $customersStore.find((c) => c.id === editId);
+					if (customer) openEdit(customer);
+					void goto('/app/clients', { replaceState: true });
+				}
+			} catch (e) {
+				if (browser && import.meta.env.DEV) console.debug('[route:clients] mount load error', e);
+			} finally {
+				if (browser && import.meta.env.DEV) console.debug('[route:clients] mount end');
 			}
-		});
+		})();
 		const stopRetry = customersStore.startRetryLoop();
 		// Carga al montar; sin refreshTrigger global (always-on POS).
 		const stuckIntervalId = setInterval(() => {
@@ -358,6 +368,8 @@
 			tryPosSelfHealReload(CLIENTS_SELFHEAL_SCREEN_KEY);
 		}, 2_000);
 		return () => {
+			alive = false;
+			if (browser && import.meta.env.DEV) console.debug('[route:clients] cleanup');
 			stopRetry();
 			clearInterval(stuckIntervalId);
 		};

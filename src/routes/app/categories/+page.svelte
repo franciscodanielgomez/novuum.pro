@@ -77,6 +77,7 @@
 	const RETRY_INTERVAL_MS = 15_000;
 
 	onMount(() => {
+		if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:categories] mount start');
 		const cached = posDataCache.get<Category[]>(CACHE_KEY);
 		if (cached?.length) {
 			categories = cached;
@@ -88,6 +89,7 @@
 
 		const retryIntervalId = setInterval(() => {
 			if (typeof document === 'undefined' || document.visibilityState !== 'visible') return;
+			if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
 			if (status === 'error') void revalidate();
 		}, RETRY_INTERVAL_MS);
 		const stuckIntervalId = setInterval(() => {
@@ -98,6 +100,7 @@
 
 		// Carga al montar; sin refreshTrigger global (always-on POS).
 		return () => {
+			if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:categories] cleanup');
 			clearInterval(retryIntervalId);
 			clearInterval(stuckIntervalId);
 		};

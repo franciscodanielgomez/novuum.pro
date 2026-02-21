@@ -401,6 +401,7 @@
 	};
 
 	onMount(() => {
+		if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:groups] mount start');
 		const cached = posDataCache.get<Group[]>(CACHE_KEY);
 		if (cached?.length) {
 			groups = cached;
@@ -411,6 +412,7 @@
 		void revalidate();
 		const retryIntervalId = setInterval(() => {
 			if (typeof document === 'undefined' || document.visibilityState !== 'visible') return;
+			if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
 			if (status === 'error') void revalidate();
 		}, RETRY_INTERVAL_MS);
 		const stuckIntervalId = setInterval(() => {
@@ -420,6 +422,7 @@
 		}, 2_000);
 		// Carga al montar; sin refreshTrigger global (always-on POS).
 		return () => {
+			if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:groups] cleanup');
 			clearInterval(retryIntervalId);
 			clearInterval(stuckIntervalId);
 		};

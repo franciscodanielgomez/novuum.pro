@@ -637,6 +637,7 @@
 	};
 
 	onMount(() => {
+		if (browser && import.meta.env.DEV) console.debug('[route:products] mount start');
 		productsStore.getState().hydrate();
 		const cached = posDataCache.get<SupabaseProduct[]>(PRODUCTS_CACHE_KEY);
 		if (cached?.length) {
@@ -664,8 +665,8 @@
 			if (saved.pageIndex !== undefined) pageIndex = Math.max(0, saved.pageIndex);
 			if (saved.pageSize !== undefined && PAGE_SIZE_OPTIONS.includes(saved.pageSize)) pageSize = saved.pageSize;
 		}
-		// Carga al montar; sin refreshTrigger global (always-on POS).
 		return () => {
+			if (browser && import.meta.env.DEV) console.debug('[route:products] cleanup');
 			clearProductsRetry();
 			clearInterval(stuckIntervalId);
 		};

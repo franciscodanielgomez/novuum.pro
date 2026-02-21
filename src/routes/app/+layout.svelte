@@ -102,16 +102,23 @@ import { businessStore } from '$lib/stores/business';
 	}
 
 	onMount(() => {
+			if (dev) console.debug('[route:app-layout] mount start');
 			void (async () => {
-				if (!$sessionStore.user) {
-					await sessionStore.hydrate();
+				try {
 					if (!$sessionStore.user) {
-						await goto('/login');
-						return;
+						await sessionStore.hydrate();
+						if (!$sessionStore.user) {
+							await goto('/login');
+							return;
+						}
 					}
+					// Si ya hay user en store, no hidratar de nuevo (evita cascadas y competencia por lock).
+					await businessStore.load();
+				} catch (e) {
+					if (dev) console.debug('[route:app-layout] mount async error', e);
+				} finally {
+					if (dev) console.debug('[route:app-layout] mount async end');
 				}
-				// Si ya hay user en store, no hidratar de nuevo (evita cascadas y competencia por lock).
-				await businessStore.load();
 			})();
 			if (isTauri()) {
 				updateStore.init();
@@ -123,6 +130,7 @@ import { businessStore } from '$lib/stores/business';
 			const unsubReturn = subscribeReturnToApp(() => runHandshakeWithReason('returnToApp'));
 
 			return () => {
+				if (dev) console.debug('[route:app-layout] cleanup');
 				unsubReturn();
 			};
 		});

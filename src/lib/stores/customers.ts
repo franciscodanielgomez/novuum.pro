@@ -76,6 +76,7 @@ export const customersStore = {
 	startRetryLoop: () => {
 		const id = setInterval(() => {
 			if (typeof document === 'undefined' || document.visibilityState !== 'visible') return;
+			if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
 			if (get(status) === 'error') void revalidate();
 		}, RETRY_INTERVAL_MS);
 		return () => clearInterval(id);

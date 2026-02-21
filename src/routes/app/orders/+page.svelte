@@ -539,6 +539,7 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 		Promise.all([ordersStore.load(), staffStore.load(), staffGuestsStore.load()]);
 
 	onMount(() => {
+		if (browser && import.meta.env.DEV) console.debug('[route:orders] mount start');
 		loadStartedAt = Date.now();
 		void loadOrdersData();
 		const stopRetry = ordersStore.startRetryLoop();
@@ -589,6 +590,7 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 				}
 			}
 		return () => {
+			if (browser && import.meta.env.DEV) console.debug('[route:orders] cleanup');
 			stopRetry();
 			clearInterval(stuckIntervalId);
 			unsubLoaded();

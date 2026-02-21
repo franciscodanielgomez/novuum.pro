@@ -215,6 +215,7 @@
 	}
 
 	onMount(() => {
+		if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:settings] mount start');
 		selfHealEnabled = getPosSelfHealEnabled();
 		// Mostrar el formulario al instante con datos del store (layout ya suele tenerlos)
 		const store = get(businessStore);
@@ -228,8 +229,9 @@
 		loading = false;
 
 		void refreshSettingsData();
-		// Carga al montar; sin refreshTrigger global (always-on POS).
-		return () => {};
+		return () => {
+			if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:settings] cleanup');
+		};
 	});
 </script>
 

@@ -15,21 +15,31 @@
 	let orderNumber: number | undefined = undefined;
 
 	onMount(() => {
+		if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:orders-edit] mount start');
 		void (async () => {
-			orderId = page.params.id ?? '';
-			await ordersStore.load();
-			const order = $ordersStore.find((o) => o.id === orderId);
-			if (!order) return;
-			exists = true;
-			orderNumber = order.orderNumber;
-			notes = order.notes ?? '';
-			paymentMethod =
-				(order.paymentMethod === 'MP' || order.paymentMethod === 'TRANSFER'
-					? order.paymentMethod
-					: 'CASH') as 'CASH' | 'MP' | 'TRANSFER';
-			cashReceived = order.cashReceived ?? order.total;
-			total = order.total;
+			try {
+				orderId = page.params.id ?? '';
+				await ordersStore.load();
+				const order = $ordersStore.find((o) => o.id === orderId);
+				if (!order) return;
+				exists = true;
+				orderNumber = order.orderNumber;
+				notes = order.notes ?? '';
+				paymentMethod =
+					(order.paymentMethod === 'MP' || order.paymentMethod === 'TRANSFER'
+						? order.paymentMethod
+						: 'CASH') as 'CASH' | 'MP' | 'TRANSFER';
+				cashReceived = order.cashReceived ?? order.total;
+				total = order.total;
+			} catch (e) {
+				if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:orders-edit] mount error', e);
+			} finally {
+				if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:orders-edit] mount end');
+			}
 		})();
+		return () => {
+			if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:orders-edit] cleanup');
+		};
 	});
 
 	const save = async () => {

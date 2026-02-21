@@ -187,6 +187,7 @@
 	};
 
 	onMount(() => {
+		if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:team] mount start');
 		loadStartedAt = Date.now();
 		void (async () => {
 			try {
@@ -195,7 +196,6 @@
 				loading = false;
 				if (teamList.length > 0) clearPosSelfHealMark(TEAM_SELFHEAL_SCREEN_KEY);
 			}
-			// Carga al montar; sin refreshTrigger global (always-on POS).
 		})();
 		const stuckIntervalId = setInterval(() => {
 			const stuck = loading && teamList.length === 0 && Date.now() - loadStartedAt > TEAM_STUCK_RELOAD_MS;
@@ -203,6 +203,7 @@
 			tryPosSelfHealReload(TEAM_SELFHEAL_SCREEN_KEY);
 		}, 2_000);
 		return () => {
+			if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:team] cleanup');
 			clearInterval(stuckIntervalId);
 		};
 	});

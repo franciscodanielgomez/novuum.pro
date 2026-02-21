@@ -1044,6 +1044,8 @@
 	});
 
 	onMount(() => {
+		let alive = true;
+		if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:create_order] mount start');
 		const current = draftsStore.current;
 		const skipRestore = !!$page.url.searchParams.get('customerId');
 		if (current.length === 0) {
@@ -1068,92 +1070,102 @@
 		const draftIdFromUrl = $page.url.searchParams.get('draftId');
 		const openClientModalFromUrl = $page.url.searchParams.get('openClientModal') === '1';
 		void (async () => {
-			await Promise.all([
-				customersStore.load(),
-				catalogStore.load(),
-				shiftsStore.loadOpen(),
-				ordersStore.load(),
-				businessStore.load()
-			]);
-			await loadSupabaseCatalog();
-			await loadPaymentMethods();
-			// Si no hay drafts (p. ej. entró directo al POS), cargar pedidos BORRADOR del repo como cards
-			if (draftsStore.current.length === 0 && !customerIdFromUrl) {
-				const allOrders = await api.orders.list();
-				const borradorOrders = allOrders.filter((o: Order) => o.status === 'BORRADOR');
-				if (borradorOrders.length > 0) {
-					const drafts = borradorOrders.map((o: Order, i: number) => orderToDraft(o, i));
-					draftsStore.set(drafts);
-					draftsList = drafts.slice();
-					activeDraftId = drafts[0].id;
-					draftCount = drafts.length;
+			try {
+				await Promise.all([
+					customersStore.load(),
+					catalogStore.load(),
+					shiftsStore.loadOpen(),
+					ordersStore.load(),
+					businessStore.load()
+				]);
+				if (!alive) return;
+				await loadSupabaseCatalog();
+				if (!alive) return;
+				await loadPaymentMethods();
+				// Si no hay drafts (p. ej. entró directo al POS), cargar pedidos BORRADOR del repo como cards
+				if (draftsStore.current.length === 0 && !customerIdFromUrl) {
+					const allOrders = await api.orders.list();
+					const borradorOrders = allOrders.filter((o: Order) => o.status === 'BORRADOR');
+					if (borradorOrders.length > 0) {
+						const drafts = borradorOrders.map((o: Order, i: number) => orderToDraft(o, i));
+						draftsStore.set(drafts);
+						draftsList = drafts.slice();
+						activeDraftId = drafts[0].id;
+						draftCount = drafts.length;
+					}
 				}
-			}
-			if (customerIdFromUrl) {
-				const customer = $customersStore.find((c) => c.id === customerIdFromUrl);
-				if (customer) {
-					draftCount += 1;
-					const newDraft = createDraft(draftCount);
-					const withClient = {
-						...newDraft,
-						paymentMethod: paymentMethods[0]?.name ?? 'Efectivo',
-						selectedCustomerId: customer.id,
-						customerPhoneSnapshot: customer.phone,
-						addressSnapshot: customer.address,
-						betweenStreetsSnapshot: customer.betweenStreets
-					};
-					try {
-						const created = await ordersStore.create({
-							customerId: customer.id,
+				if (customerIdFromUrl) {
+					const customer = $customersStore.find((c) => c.id === customerIdFromUrl);
+					if (customer) {
+						draftCount += 1;
+						const newDraft = createDraft(draftCount);
+						const withClient = {
+							...newDraft,
+							paymentMethod: paymentMethods[0]?.name ?? 'Efectivo',
+							selectedCustomerId: customer.id,
 							customerPhoneSnapshot: customer.phone,
 							addressSnapshot: customer.address,
-							betweenStreetsSnapshot: customer.betweenStreets,
-							status: 'BORRADOR',
-							paymentMethod: paymentMethods[0]?.name ?? 'Efectivo',
-							total: 0,
-							items: [],
-							createdByUserId: $sessionStore.user?.id,
-							cashierNameSnapshot: $sessionStore.user?.name,
-							shiftId: $sessionStore.shift?.id
-						});
-						(withClient as OrderDraft).orderId = created.id;
-					} catch {
-						// sigue con el borrador local sin orderId
+							betweenStreetsSnapshot: customer.betweenStreets
+						};
+						try {
+							const created = await ordersStore.create({
+								customerId: customer.id,
+								customerPhoneSnapshot: customer.phone,
+								addressSnapshot: customer.address,
+								betweenStreetsSnapshot: customer.betweenStreets,
+								status: 'BORRADOR',
+								paymentMethod: paymentMethods[0]?.name ?? 'Efectivo',
+								total: 0,
+								items: [],
+								createdByUserId: $sessionStore.user?.id,
+								cashierNameSnapshot: $sessionStore.user?.name,
+								shiftId: $sessionStore.shift?.id
+							});
+							(withClient as OrderDraft).orderId = created.id;
+						} catch {
+							// sigue con el borrador local sin orderId
+						}
+						draftsStore.set([withClient]);
+						activeDraftId = newDraft.id;
+						await goto('/app/create_order', { replaceState: true });
 					}
-					draftsStore.set([withClient]);
-					activeDraftId = newDraft.id;
+				} else if (draftIdFromUrl) {
+					const current = draftsStore.current;
+					const match = current.find(
+						(d) => d.id === draftIdFromUrl || d.orderId === draftIdFromUrl
+					);
+					if (match) {
+						activeDraftId = match.id;
+						draftsList = draftsStore.current.slice();
+					} else {
+						// Cargar el pedido desde la API (ej. llegó por "Continuar" desde lista de pedidos)
+						const order = await api.orders.get(draftIdFromUrl);
+						if (order && order.status === 'BORRADOR') {
+							const draft = orderToDraft(order, current.length);
+							draftsStore.update((prev) => [...prev, draft]);
+							draftsList = draftsStore.current.slice();
+							activeDraftId = draft.id;
+						} else {
+							toastsStore.error('Pedido no encontrado o no es un borrador');
+						}
+					}
+					await goto('/app/create_order', { replaceState: true });
+				} else if (openClientModalFromUrl) {
+					openClientModal(false);
 					await goto('/app/create_order', { replaceState: true });
 				}
-			} else if (draftIdFromUrl) {
-				const current = draftsStore.current;
-				const match = current.find(
-					(d) => d.id === draftIdFromUrl || d.orderId === draftIdFromUrl
-				);
-				if (match) {
-					activeDraftId = match.id;
-					draftsList = draftsStore.current.slice();
-				} else {
-					// Cargar el pedido desde la API (ej. llegó por "Continuar" desde lista de pedidos)
-					const order = await api.orders.get(draftIdFromUrl);
-					if (order && order.status === 'BORRADOR') {
-						const draft = orderToDraft(order, current.length);
-						draftsStore.update((prev) => [...prev, draft]);
-						draftsList = draftsStore.current.slice();
-						activeDraftId = draft.id;
-					} else {
-						toastsStore.error('Pedido no encontrado o no es un borrador');
-					}
-				}
-				await goto('/app/create_order', { replaceState: true });
-			} else if (openClientModalFromUrl) {
-				openClientModal(false);
-				await goto('/app/create_order', { replaceState: true });
+			} catch (e) {
+				if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:create_order] mount error', e);
+			} finally {
+				if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:create_order] mount end');
 			}
 		})();
 		productsStore.getState().hydrate();
 		// Carga al montar; sin refreshTrigger global (always-on POS).
 		window.addEventListener('keydown', onKeyDown);
 		return () => {
+			alive = false;
+			if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:create_order] cleanup');
 			window.removeEventListener('keydown', onKeyDown);
 		};
 	});

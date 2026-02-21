@@ -40,8 +40,20 @@
 		toastsStore.success('Caja cerrada');
 	};
 
-	onMount(async () => {
-		await Promise.all([staffStore.load(), shiftsStore.loadOpen(), ordersStore.load()]);
+	onMount(() => {
+		if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:caja] mount start');
+		void (async () => {
+			try {
+				await Promise.all([staffStore.load(), shiftsStore.loadOpen(), ordersStore.load()]);
+			} catch (e) {
+				if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:caja] mount error', e);
+			} finally {
+				if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:caja] mount end');
+			}
+		})();
+		return () => {
+			if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:caja] cleanup');
+		};
 	});
 </script>
 
