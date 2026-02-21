@@ -483,58 +483,63 @@
 		await loadAddresses(userId);
 	};
 
-	onMount(async () => {
-		const {
-			data: { user }
-		} = await supabase.auth.getUser();
-		if (!user?.id) return;
-		currentUserId = user.id;
-		profileTableReady = true;
-		addressesTableReady = true;
+	onMount(() => {
+		let unsub: (() => void) | null = null;
+		(async () => {
+			const {
+				data: { user }
+			} = await supabase.auth.getUser();
+			if (!user?.id) return;
+			currentUserId = user.id;
+			profileTableReady = true;
+			addressesTableReady = true;
 
-		email = user.email ?? '';
-		const metaName = ((user.user_metadata?.name as string | undefined) ?? '').trim();
-		if (metaName) {
-			const parts = metaName.split(/\s+/);
-			firstName = parts[0] ?? '';
-			lastName = parts.slice(1).join(' ');
-		}
-		avatarUrl = ((user.user_metadata?.avatar_url as string | undefined) ?? '').trim();
+			email = user.email ?? '';
+			const metaName = ((user.user_metadata?.name as string | undefined) ?? '').trim();
+			if (metaName) {
+				const parts = metaName.split(/\s+/);
+				firstName = parts[0] ?? '';
+				lastName = parts.slice(1).join(' ');
+			}
+			avatarUrl = ((user.user_metadata?.avatar_url as string | undefined) ?? '').trim();
 
-		if (profileTableReady) {
-			try {
-				const data = await api.userProfiles.getById(user.id);
-				if (data) {
-					firstName = data.first_name ?? firstName;
-					lastName = data.last_name ?? lastName;
-					const parsedPhone = splitPhone(data.phone);
-					phoneCountry = parsedPhone.country;
-					phone = parsedPhone.number;
-					const parsedRefPhone = splitPhone(data.reference_phone);
-					referencePhoneCountry = parsedRefPhone.country;
-					referencePhone = parsedRefPhone.number;
-					avatarUrl = data.avatar_url ?? avatarUrl;
-				}
-			} catch (error) {
-				if (isMissingTableError((error as Error)?.message, 'user_profiles')) {
-					profileTableReady = false;
-					toastsStore.error('Falta migración de base de datos: tabla user_profiles');
-				} else {
-					toastsStore.error('No se pudieron cargar los datos del perfil. Revisá la conexión.');
+			if (profileTableReady) {
+				try {
+					const data = await api.userProfiles.getById(user.id);
+					if (data) {
+						firstName = data.first_name ?? firstName;
+						lastName = data.last_name ?? lastName;
+						const parsedPhone = splitPhone(data.phone);
+						phoneCountry = parsedPhone.country;
+						phone = parsedPhone.number;
+						const parsedRefPhone = splitPhone(data.reference_phone);
+						referencePhoneCountry = parsedRefPhone.country;
+						referencePhone = parsedRefPhone.number;
+						avatarUrl = data.avatar_url ?? avatarUrl;
+					}
+				} catch (error) {
+					if (isMissingTableError((error as Error)?.message, 'user_profiles')) {
+						profileTableReady = false;
+						toastsStore.error('Falta migración de base de datos: tabla user_profiles');
+					} else {
+						toastsStore.error('No se pudieron cargar los datos del perfil. Revisá la conexión.');
+					}
 				}
 			}
-		}
-		await loadAddresses(user.id);
+			await loadAddresses(user.id);
 
-		let firstRefresh = true;
-		const unsub = refreshTrigger.subscribe(() => {
-			if (firstRefresh) {
-				firstRefresh = false;
-				return;
-			}
-			void loadProfileFromApi(user.id);
-		});
-		return () => unsub();
+			let firstRefresh = true;
+			unsub = refreshTrigger.subscribe(() => {
+				if (firstRefresh) {
+					firstRefresh = false;
+					return;
+				}
+				void loadProfileFromApi(user.id);
+			});
+		})();
+		return () => {
+			unsub?.();
+		};
 	});
 </script>
 
