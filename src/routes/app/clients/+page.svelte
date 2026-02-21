@@ -6,7 +6,7 @@
 	import { api } from '$lib/api';
 	import { customerSchema, customersBulkSchema } from '$lib/schemas';
 	import { customersStore, customersStatus, customersLoadError } from '$lib/stores/customers';
-	import { refreshTrigger } from '$lib/stores/refreshTrigger';
+	import { uiStore } from '$lib/stores/uiStore';
 	import { toastsStore } from '$lib/stores/toasts';
 	import type { Customer } from '$lib/types';
 	import { goto } from '$app/navigation';
@@ -58,6 +58,27 @@
 	let clientSearchError = $state(false);
 
 	const searchDigits = $derived(String(clientSearchQuery ?? '').replace(/\D/g, ''));
+
+	// Return-to-app handshake: no refrescar datos mientras el modal o el drawer con cambios estén abiertos.
+	$effect(() => {
+		uiStore.setModalOpen(newClientModalOpen);
+	});
+	$effect(() => {
+		if (!drawerOpen) {
+			uiStore.setFormDirty(false);
+			return;
+		}
+		if (!editing) {
+			uiStore.setFormDirty(false);
+			return;
+		}
+		const dirty =
+			form.phone !== editing.phone ||
+			form.address !== (editing.address ?? '') ||
+			form.betweenStreets !== (editing.betweenStreets ?? '') ||
+			form.notes !== (editing.notes ?? '');
+		uiStore.setFormDirty(dirty);
+	});
 
 	// Filtro local por teléfono (dígitos).
 	const filteredFromStore = $derived.by(() => {
@@ -329,14 +350,7 @@
 			}
 		});
 		const stopRetry = customersStore.startRetryLoop();
-		let firstRefresh = true;
-		const unsub = refreshTrigger.subscribe(() => {
-			if (firstRefresh) {
-				firstRefresh = false;
-				return;
-			}
-			void customersStore.revalidate();
-		});
+		// Carga al montar; sin refreshTrigger global (always-on POS).
 		const stuckIntervalId = setInterval(() => {
 			const st = get(customersStatus);
 			const stuck = (st === 'loading' || st === 'refreshing') && get(customersStore).length === 0 && Date.now() - loadStartedAt > CLIENTS_STUCK_RELOAD_MS;
@@ -345,7 +359,6 @@
 		}, 2_000);
 		return () => {
 			stopRetry();
-			unsub();
 			clearInterval(stuckIntervalId);
 		};
 	});

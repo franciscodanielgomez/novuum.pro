@@ -1,14 +1,15 @@
 <script lang="ts">
 	import { page } from '$app/stores';
+	import { dev } from '$app/environment';
 	import { goto } from '$app/navigation';
 	import { desktopDownloadStore } from '$lib/desktop-download';
 	import { isTauri } from '$lib/printing/printer';
 import LogoNovuum from '$lib/components/LogoNovuum.svelte';
 import { businessStore } from '$lib/stores/business';
-	import { refreshTrigger } from '$lib/stores/refreshTrigger';
-	import { sessionLog } from '$lib/session-debug';
+	import { subscribeReturnToApp, runReturnToAppHandshake } from '$lib/app/returnToApp';
 	import { sessionStore } from '$lib/stores/session';
 	import { themeStore } from '$lib/stores/theme';
+	import { uiStore } from '$lib/stores/uiStore';
 	import { updateStore } from '$lib/stores/updateStore';
 	import { onMount, tick } from 'svelte';
 
@@ -91,109 +92,40 @@ import { businessStore } from '$lib/stores/business';
 	// Lista plana para cuando el menú está colapsado (solo iconos)
 	const items = navGroups.flatMap((g) => g.items);
 
+	function runHandshakeWithReason(reason: string) {
+		uiStore._update({ pendingReturnHandshake: false });
+		void runReturnToAppHandshake(reason);
+	}
+
+	function onReintentar() {
+		runHandshakeWithReason('reintentar');
+	}
+
 	onMount(() => {
-		void (async () => {
-			if (!$sessionStore.user) {
-				await sessionStore.hydrate();
+			void (async () => {
 				if (!$sessionStore.user) {
-					await goto('/login');
-					return;
+					await sessionStore.hydrate();
+					if (!$sessionStore.user) {
+						await goto('/login');
+						return;
+					}
 				}
+				// Si ya hay user en store, no hidratar de nuevo (evita cascadas y competencia por lock).
+				await businessStore.load();
+			})();
+			if (isTauri()) {
+				updateStore.init();
 			} else {
-				// Si ya hay usuario en store, igualmente hidratar en segundo plano para alinear token/sesión real.
-				void sessionStore.hydrate();
+				desktopDownloadStore.init();
 			}
-			// No disparar hydrate() extra: puede competir por lock de auth en reactivaciones.
-			await businessStore.load();
-		})();
-		if (isTauri()) {
-			updateStore.init();
-		} else {
-			desktopDownloadStore.init();
-		}
-		// Refresco automático: negocio + perfil de usuario (menú) + trigger para páginas. Rápido al volver o navegar.
-		const refreshData = () => {
-			void businessStore.load();
-			void sessionStore.refreshUserProfile();
-			refreshTrigger.update((n) => n + 1);
-		};
-		const DATA_REFRESH_MS = 2 * 60 * 1000;
-		const dataInterval = setInterval(refreshData, DATA_REFRESH_MS);
-		// Al volver a la pestaña o ventana (ej. después de imprimir): recarga completa para reconectar siempre
-		const MIN_RETURN_DEBOUNCE_MS = 400;
-		// Tras 3s sin actividad en la misma pestaña, el primer clic dispara refresh; tras 30s recarga completa
-		const INACTIVITY_REVALIDATE_MS = 3_000;
-		const INACTIVITY_FULL_RELOAD_MS = 30_000;
-		const ACTIVITY_DEBOUNCE_MS = 50;
-		let lastReturnAt = 0;
-		let lastActivityAt = Date.now();
-		let lastActivityTick = 0;
-		let idleRefreshLock = false;
-		const onReturnToApp = () => {
-			const now = Date.now();
-			if (MIN_RETURN_DEBOUNCE_MS > 0 && now - lastReturnAt < MIN_RETURN_DEBOUNCE_MS) return;
-			lastReturnAt = now;
-			sessionLog('onReturnToApp: volviste a la app → recarga de página para reconectar');
-			window.location.reload();
-		};
-		const onUserActivity = () => {
-			const now = Date.now();
-			if (now - lastActivityTick < ACTIVITY_DEBOUNCE_MS) return;
-			lastActivityTick = now;
-			const idleMs = now - lastActivityAt;
-			const wasIdle = idleMs >= INACTIVITY_REVALIDATE_MS;
-			lastActivityAt = now;
-			if (!wasIdle || idleRefreshLock) return;
-			idleRefreshLock = true;
-			if (idleMs >= INACTIVITY_FULL_RELOAD_MS) {
-				sessionLog('onUserActivity: inactividad larga → recarga de página');
-				window.location.reload();
-				return;
-			}
-			sessionLog('onUserActivity: idle → refreshData');
-			void refreshData();
-			setTimeout(() => {
-				idleRefreshLock = false;
-			}, 1_000);
-		};
-		const onVisibilityChange = () => {
-			if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-				onReturnToApp();
-			}
-		};
-		const onWindowFocus = () => {
-			if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-				onReturnToApp();
-			}
-		};
-		document.addEventListener('visibilitychange', onVisibilityChange);
-		window.addEventListener('focus', onWindowFocus);
-		window.addEventListener('pointerdown', onUserActivity, true);
-		window.addEventListener('keydown', onUserActivity, true);
-		window.addEventListener('touchstart', onUserActivity, true);
-		// Al navegar (link, botón que lleva a otra ruta) refrescar datos para reconectar; no se dispara a cada rato mientras usás la misma pantalla
-		let prevPath: string | null = null;
-		const unsubPage = page.subscribe((p) => {
-			const path = p.url.pathname;
-			if (prevPath === null) {
-				prevPath = path;
-				return;
-			}
-			if (prevPath === path) return;
-			prevPath = path;
-			sessionLog('onNavigate → refreshData');
-			void refreshData();
+
+			// Return-to-app: solo verificar sesión al volver visible (cooldown y modal/formDirty en returnToApp.ts).
+			const unsubReturn = subscribeReturnToApp(() => runHandshakeWithReason('returnToApp'));
+
+			return () => {
+				unsubReturn();
+			};
 		});
-		return () => {
-			unsubPage();
-			clearInterval(dataInterval);
-			document.removeEventListener('visibilitychange', onVisibilityChange);
-			window.removeEventListener('focus', onWindowFocus);
-			window.removeEventListener('pointerdown', onUserActivity, true);
-			window.removeEventListener('keydown', onUserActivity, true);
-			window.removeEventListener('touchstart', onUserActivity, true);
-		};
-	});
 
 	// POS always-on: no redirigir automáticamente por user=null transitorio.
 	// El login se fuerza solo en mount inicial sin usuario o hard-expired con acción explícita.
@@ -606,6 +538,21 @@ import { businessStore } from '$lib/stores/business';
 	</aside>
 
 	<div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+		{#if $uiStore.reconnectFailed || $uiStore.pendingReturnHandshake}
+			<div
+				class="flex items-center justify-between gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+				role="status"
+			>
+				<span>{$uiStore.reconnectFailed ? 'Reconectando…' : 'Actualizar datos'}</span>
+				<button
+					type="button"
+					class="rounded border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/60 dark:text-amber-100 dark:hover:bg-amber-800/60"
+					onclick={() => onReintentar()}
+				>
+					Reintentar
+				</button>
+			</div>
+		{/if}
 		<header
 			class="flex h-14 items-center justify-between border-b border-slate-200 bg-white px-4 dark:border-neutral-800 dark:bg-black md:px-6"
 		>

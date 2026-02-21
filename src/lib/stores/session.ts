@@ -227,14 +227,26 @@ export const sessionStore = {
 
 		if (listenerInitialized) return;
 		listenerInitialized = true;
+
+		// Nunca emitimos GLOBAL_REFRESH/refreshTrigger desde aquí; evita tormenta al volver de background.
+		const IGNORE_REFRESH_EVENTS = new Set<string>(['INITIAL_SESSION', 'TOKEN_REFRESHED', 'SIGNED_IN']);
 		supabase.auth.onAuthStateChange(async (event, session) => {
+			if (browser) console.debug('[auth] onAuthStateChange', { event });
 			if (event === 'SIGNED_OUT') {
 				state.update((s) => ({ ...s, user: null, ready: true }));
 				return;
 			}
 			if (!session) {
-				// Algunos eventos transitorios llegan sin session; no expulsar al usuario.
 				state.update((s) => ({ ...s, ready: true, authStatus: s.user ? 'offline' : s.authStatus }));
+				return;
+			}
+			// INITIAL_SESSION / TOKEN_REFRESHED / SIGNED_IN: solo sincronizar user mínimo; NO emitir GLOBAL_REFRESH.
+			if (IGNORE_REFRESH_EVENTS.has(event)) {
+				const minimal = minimalUserFromAuth(session.user);
+				state.update((s) => ({ ...s, user: minimal, ready: true }));
+				if (browser) {
+					console.debug('[auth] no GLOBAL_REFRESH', { reason: 'sync_only', event });
+				}
 				return;
 			}
 			try {

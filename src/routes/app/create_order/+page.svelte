@@ -17,7 +17,7 @@
 	import { toastsStore } from '$lib/stores/toasts';
 	import { fromZustand } from '$lib/stores/zustandBridge';
 	import { api } from '$lib/api';
-	import { refreshTrigger } from '$lib/stores/refreshTrigger';
+	import { uiStore } from '$lib/stores/uiStore';
 	import { printTicket } from '$lib/printing/printer';
 	import { orderToTicketText } from '$lib/printing/ticket-layout';
 	import type { Customer, Order, OrderDraft, OrderItem, PaymentMethod, Product, SKU } from '$lib/types';
@@ -110,6 +110,16 @@
 			configLoadController = null;
 		}
 		configLoading = false;
+	});
+
+	// Return-to-app handshake: no refrescar datos mientras algún modal esté abierto.
+	$effect(() => {
+		const anyOpen =
+			clientModalOpen ||
+			editClientModalOpen ||
+			configOpen ||
+			(deleteDraftConfirmId !== null);
+		uiStore.setModalOpen(anyOpen);
 	});
 
 	/** Métodos de pago desde la BD (Configuraciones); para selector y solo Efectivo muestra Paga con / Vuelto */
@@ -1141,19 +1151,9 @@
 			}
 		})();
 		productsStore.getState().hydrate();
-		// Al volver de inactividad (visibility/focus o cada 2 min), el layout dispara refreshTrigger; recargamos catálogo y métodos de pago
-		let firstRefresh = true;
-		const refreshUnsub = refreshTrigger.subscribe(() => {
-			if (firstRefresh) {
-				firstRefresh = false;
-				return;
-			}
-			void loadSupabaseCatalog(false);
-			void loadPaymentMethods();
-		});
+		// Carga al montar; sin refreshTrigger global (always-on POS).
 		window.addEventListener('keydown', onKeyDown);
 		return () => {
-			refreshUnsub();
 			window.removeEventListener('keydown', onKeyDown);
 		};
 	});

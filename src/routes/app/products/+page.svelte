@@ -9,7 +9,7 @@
 	import { api } from '$lib/api';
 	import { asyncGuard } from '$lib/data/asyncGuard';
 	import { productsStore } from '$lib/stores/productsStore';
-	import { refreshTrigger } from '$lib/stores/refreshTrigger';
+	import { uiStore } from '$lib/stores/uiStore';
 	import { fromZustand } from '$lib/stores/zustandBridge';
 	import { toastsStore } from '$lib/stores/toasts';
 	import { posDataCache } from '$lib/pos/cache';
@@ -664,39 +664,26 @@
 			if (saved.pageIndex !== undefined) pageIndex = Math.max(0, saved.pageIndex);
 			if (saved.pageSize !== undefined && PAGE_SIZE_OPTIONS.includes(saved.pageSize)) pageSize = saved.pageSize;
 		}
-		let firstRefresh = true;
-		const unsub = refreshTrigger.subscribe(() => {
-			if (firstRefresh) {
-				firstRefresh = false;
-				return;
-			}
-			void loadCategories();
-			void loadProductGroups();
-			void loadSupabaseProducts();
-			// Si el drawer de edición está abierto, recargar grupos y asignaciones para que no quede "No hay grupos definidos"
-			if (productDrawerRef.open && productDrawerRef.editingId && productDrawerRef.useSupabase && productDrawerRef.hasProducts) {
-				void loadProductGroups();
-				loadProductGroupAssignments(productDrawerRef.editingId)
-					.then((groups) => {
-						if (productDrawerRef.open && productDrawerRef.editingId) productForm = { ...productForm, groups };
-					})
-					.catch(() => {});
-			}
-		});
+		// Carga al montar; sin refreshTrigger global (always-on POS).
 		return () => {
-			unsub();
 			clearProductsRetry();
 			clearInterval(stuckIntervalId);
 		};
 	});
 
-	// Ref para que el callback de refreshTrigger lea el estado actual del drawer
 	const productDrawerRef = { open: false, editingId: null as string | null, useSupabase: false, hasProducts: false };
 	$effect(() => {
 		productDrawerRef.open = detailDrawerOpen;
 		productDrawerRef.editingId = editingProductId;
 		productDrawerRef.useSupabase = useSupabase;
 		productDrawerRef.hasProducts = supabaseProducts.length > 0;
+	});
+
+	// Return-to-app handshake: no refrescar datos mientras algún modal/drawer esté abierto.
+	$effect(() => {
+		const anyOpen =
+			detailDrawerOpen || productDialogOpen || groupDialogOpen || optionDialogOpen || deleteConfirmOpen;
+		uiStore.setModalOpen(anyOpen);
 	});
 
 	$effect(() => {

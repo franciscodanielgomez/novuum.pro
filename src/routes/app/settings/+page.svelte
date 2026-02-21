@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { api } from '$lib/api';
 	import { businessStore } from '$lib/stores/business';
-	import { refreshTrigger } from '$lib/stores/refreshTrigger';
 	import { toastsStore } from '$lib/stores/toasts';
 	import {
 		isTauri,
@@ -229,17 +228,8 @@
 		loading = false;
 
 		void refreshSettingsData();
-		let firstRefresh = true;
-		const unsub = refreshTrigger.subscribe(() => {
-			if (firstRefresh) {
-				firstRefresh = false;
-				return;
-			}
-			void refreshSettingsData();
-		});
-		return () => {
-			unsub();
-		};
+		// Carga al montar; sin refreshTrigger global (always-on POS).
+		return () => {};
 	});
 </script>
 

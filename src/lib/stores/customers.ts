@@ -72,9 +72,10 @@ export const customersStore = {
 	},
 	/** Solo revalidar (usa cache actual como base). Para retry/refresh. */
 	revalidate: () => revalidate(),
-	/** Iniciar reintentos automáticos cada 15s cuando status es error (llamar desde página). */
+	/** Iniciar reintentos automáticos cada 15s cuando status es error (solo con pestaña visible). */
 	startRetryLoop: () => {
 		const id = setInterval(() => {
+			if (typeof document === 'undefined' || document.visibilityState !== 'visible') return;
 			if (get(status) === 'error') void revalidate();
 		}, RETRY_INTERVAL_MS);
 		return () => clearInterval(id);

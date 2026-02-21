@@ -8,7 +8,6 @@
 	import DataTablePaginator from '$lib/components/table/DataTablePaginator.svelte';
 	import { loadTableState, saveTableState } from '$lib/components/table/table.state';
 	import { ordersStore, ordersStatus, ordersLoadError } from '$lib/stores/orders';
-	import { refreshTrigger } from '$lib/stores/refreshTrigger';
 	import { staffStore } from '$lib/stores/staff';
 	import { staffGuestsStore } from '$lib/stores/staffGuests';
 	import { toastsStore } from '$lib/stores/toasts';
@@ -539,19 +538,11 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 	const loadOrdersData = () =>
 		Promise.all([ordersStore.load(), staffStore.load(), staffGuestsStore.load()]);
 
-	let refreshUnsub: (() => void) | null = null;
 	onMount(() => {
 		loadStartedAt = Date.now();
 		void loadOrdersData();
 		const stopRetry = ordersStore.startRetryLoop();
-		let firstRefresh = true;
-		refreshUnsub = refreshTrigger.subscribe(() => {
-			if (firstRefresh) {
-				firstRefresh = false;
-				return;
-			}
-			void loadOrdersData();
-		});
+		// Carga al montar; sin refreshTrigger global (always-on POS).
 			const stuckIntervalId = setInterval(() => {
 				const st = get(ordersStatus);
 				const stuck = (st === 'loading' || st === 'refreshing') && get(ordersStore).length === 0 && Date.now() - loadStartedAt > ORDERS_STUCK_RELOAD_MS;
@@ -599,7 +590,6 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 			}
 		return () => {
 			stopRetry();
-			refreshUnsub?.();
 			clearInterval(stuckIntervalId);
 			unsubLoaded();
 		};

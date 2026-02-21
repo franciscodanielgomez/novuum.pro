@@ -2,7 +2,6 @@
 	import SideDrawer from '$lib/components/SideDrawer.svelte';
 	import { DataTable } from '$lib/components/table';
 	import type { DataTableColumn } from '$lib/components/table';
-	import { refreshTrigger } from '$lib/stores/refreshTrigger';
 	import { staffStore } from '$lib/stores/staff';
 	import { staffGuestsStore } from '$lib/stores/staffGuests';
 	import { sessionStore } from '$lib/stores/session';
@@ -187,7 +186,6 @@
 		newGuestForm = { name: '', roles: ['CAJERO'], email: '', phone: '', active: true };
 	};
 
-	let refreshUnsub: (() => void) | null = null;
 	onMount(() => {
 		loadStartedAt = Date.now();
 		void (async () => {
@@ -197,14 +195,7 @@
 				loading = false;
 				if (teamList.length > 0) clearPosSelfHealMark(TEAM_SELFHEAL_SCREEN_KEY);
 			}
-			let firstRefresh = true;
-			refreshUnsub = refreshTrigger.subscribe(() => {
-				if (firstRefresh) {
-					firstRefresh = false;
-					return;
-				}
-				void Promise.all([staffStore.load(), staffGuestsStore.load()]);
-			});
+			// Carga al montar; sin refreshTrigger global (always-on POS).
 		})();
 		const stuckIntervalId = setInterval(() => {
 			const stuck = loading && teamList.length === 0 && Date.now() - loadStartedAt > TEAM_STUCK_RELOAD_MS;
@@ -212,7 +203,6 @@
 			tryPosSelfHealReload(TEAM_SELFHEAL_SCREEN_KEY);
 		}, 2_000);
 		return () => {
-			refreshUnsub?.();
 			clearInterval(stuckIntervalId);
 		};
 	});

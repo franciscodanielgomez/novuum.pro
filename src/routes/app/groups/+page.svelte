@@ -4,7 +4,6 @@
 	import { DataTable } from '$lib/components/table';
 	import type { DataTableColumn } from '$lib/components/table';
 	import { asyncGuard } from '$lib/data/asyncGuard';
-	import { refreshTrigger } from '$lib/stores/refreshTrigger';
 	import { toastsStore } from '$lib/stores/toasts';
 	import { posDataCache } from '$lib/pos/cache';
 	import { posDataLog, posDataWarn } from '$lib/pos/diagnostics';
@@ -183,7 +182,6 @@
 		void loadGroupItems(g.id);
 	};
 
-	// Ref actualizado en cada render para que el callback de refreshTrigger lea el estado actual del drawer
 	const drawerRef = { open: false, editingId: null as string | null };
 	$effect(() => {
 		drawerRef.open = detailDrawerOpen;
@@ -412,6 +410,7 @@
 		}
 		void revalidate();
 		const retryIntervalId = setInterval(() => {
+			if (typeof document === 'undefined' || document.visibilityState !== 'visible') return;
 			if (status === 'error') void revalidate();
 		}, RETRY_INTERVAL_MS);
 		const stuckIntervalId = setInterval(() => {
@@ -419,22 +418,10 @@
 			if (!stuck) return;
 			tryPosSelfHealReload(GROUPS_SELFHEAL_SCREEN_KEY);
 		}, 2_000);
-		let firstRefresh = true;
-		const unsub = refreshTrigger.subscribe(() => {
-			if (firstRefresh) {
-				firstRefresh = false;
-				return;
-			}
-			void revalidate();
-			// Si el modal del grupo está abierto, recargar ítems para que el árbol no quede en "Cargando..."
-			if (drawerRef.open && drawerRef.editingId) {
-				void loadGroupItems(drawerRef.editingId);
-			}
-		});
+		// Carga al montar; sin refreshTrigger global (always-on POS).
 		return () => {
 			clearInterval(retryIntervalId);
 			clearInterval(stuckIntervalId);
-			unsub();
 		};
 	});
 

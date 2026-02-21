@@ -28,21 +28,18 @@ function sanitizeResource(url: string): string {
 	}
 }
 
-let getSupabase: (() => {
+function isVisible(): boolean {
+	return typeof document !== 'undefined' && document.visibilityState === 'visible';
+}
+
+/** Mínimo necesario para refresh en 401; se resuelve lazy para evitar circular con client.ts */
+type GetSupabaseClient = () => {
 	auth: {
 		refreshSession: () => Promise<{ data: { session: unknown }; error: { message?: string } | null }>;
 	};
-}) | null = null;
+};
 
-export function setSupabaseRef(
-	ref: () => {
-		auth: {
-			refreshSession: () => Promise<{ data: { session: unknown }; error: { message?: string } | null }>;
-		};
-	}
-): void {
-	getSupabase = ref;
-}
+let getSupabaseRef: GetSupabaseClient | null = null;
 
 type AuthHandlers = {
 	onHardExpired: () => void;
@@ -58,12 +55,13 @@ type RefreshResult = { ok: boolean; invalidGrant: boolean };
 let refreshPromise: Promise<RefreshResult> | null = null;
 let seq = 0;
 
+/** Único singleflight global para refresh. Usado en 401-retry y en return-to-app (solo si expiresIn < 60s). */
 export async function refreshSessionSingleFlight(): Promise<RefreshResult> {
 	if (refreshPromise) return refreshPromise;
 	posMetrics.incRefreshAttempts();
 	refreshPromise = (async () => {
 		try {
-			const sb = getSupabase?.();
+			const sb = getSupabaseRef?.();
 			if (!sb) return { ok: false, invalidGrant: false };
 			const { data, error } = await sb.auth.refreshSession();
 			if (error) {
@@ -112,11 +110,19 @@ function debugLog(stage: 'start' | 'end' | 'error', runtime: RequestRuntime, ext
 		status: runtime.status,
 		aborted: runtime.aborted,
 		abortedBy: runtime.abortedBy,
+		visibilityState: typeof document !== 'undefined' ? document.visibilityState : undefined,
+		onLine: typeof navigator !== 'undefined' ? navigator.onLine : undefined,
 		...extra
 	});
 }
 
-export function createPosFetch(): typeof fetch {
+/**
+ * Crea el fetch que envuelve todas las peticiones de Supabase.
+ * getSupabase se invoca solo al ejecutar requests (p. ej. en 401 para refresh), no al construir,
+ * así se evita dependencia circular con client.ts (supabase se asigna después de createClient).
+ */
+export function createPosFetch(getSupabase: GetSupabaseClient): typeof fetch {
+	getSupabaseRef = getSupabase;
 	return async function posFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
 		const method = getMethod(input, init);
 		const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
@@ -126,12 +132,16 @@ export function createPosFetch(): typeof fetch {
 		const skip401Handling = isAuthApi(url);
 		const externalSignal = init?.signal ?? null;
 
+		// Auth: sin timeout aquí. Resto: timeout "soft" solo cuando la pestaña es visible (background-safe).
+		// En background no iniciamos timeout para evitar que timers throttled aborten al volver.
 		let timeoutMs: number | null = null;
-		let controller: AbortController | null = null;
 		let timeoutId: ReturnType<typeof setTimeout> | null = null;
-		if (!externalSignal) {
-			timeoutMs = timeoutForMethod(method);
-			controller = new AbortController();
+		if (!externalSignal && !isAuthApi(url)) {
+			const baseMs = timeoutForMethod(method);
+			if (isVisible()) {
+				timeoutMs = baseMs;
+			}
+			// Si !isVisible() dejamos timeoutMs = null: no timeout en background, no abort.
 		}
 
 		const runtime: RequestRuntime = {
@@ -146,23 +156,17 @@ export function createPosFetch(): typeof fetch {
 			abortedBy: null
 		};
 
-		const activeSignal = externalSignal ?? controller?.signal ?? null;
+		// Solo señal externa; no usamos AbortController para timeout (soft timeout: rechazar sin abortar el fetch).
+		const activeSignal = externalSignal ?? null;
 		const abortHandler = () => {
-			if (controller) controller.abort();
+			// Solo relevante si hay externalSignal
 		};
 
 		if (activeSignal?.aborted) {
 			runtime.aborted = true;
-			runtime.abortedBy = externalSignal ? 'external' : 'timeout-wrapper';
+			runtime.abortedBy = 'external';
 			debugLog('error', runtime, { error: 'Aborted before request' });
 			throw new DOMException('Aborted', 'AbortError');
-		}
-
-		if (controller && timeoutMs != null) {
-			timeoutId = setTimeout(() => {
-				runtime.timedOut = true;
-				controller?.abort();
-			}, timeoutMs);
 		}
 		if (externalSignal) externalSignal.addEventListener('abort', abortHandler, { once: true });
 
@@ -181,8 +185,7 @@ export function createPosFetch(): typeof fetch {
 			}
 		}
 
-		debugLog('start', runtime);
-		try {
+		const run = async (): Promise<Response> => {
 			if (skip401Handling) {
 				const res = await doRequest(input, init);
 				runtime.status = res.status;
@@ -198,6 +201,7 @@ export function createPosFetch(): typeof fetch {
 				return res;
 			}
 
+			// 401: un solo reintento tras refresh (SDK ya tiene autoRefreshToken; este path es por si el token venció en vuelo).
 			if (res.status === 401 && isRestApi(url) && canRetry) {
 				const refreshResult = await refreshSessionSingleFlight();
 				if (refreshResult.invalidGrant) authHandlers?.onHardExpired();
@@ -216,12 +220,40 @@ export function createPosFetch(): typeof fetch {
 
 			debugLog('end', runtime);
 			return res;
+		};
+
+		// Timeout "soft": rechazar tras timeoutMs sin abortar el fetch (evita que el SDK quede roto al volver).
+		const runWithOptionalSoftTimeout = (): Promise<Response> => {
+			if (timeoutMs == null) return run();
+			return new Promise((resolve, reject) => {
+				timeoutId = setTimeout(() => {
+					runtime.timedOut = true;
+					posMetrics.incRequestsAborted();
+					reject(new DOMException('Request timed out', 'AbortError'));
+				}, timeoutMs);
+				run()
+					.then((r) => {
+						if (timeoutId) clearTimeout(timeoutId);
+						timeoutId = null;
+						resolve(r);
+					})
+					.catch((e) => {
+						if (timeoutId) clearTimeout(timeoutId);
+						timeoutId = null;
+						reject(e);
+					});
+			});
+		};
+
+		debugLog('start', runtime);
+		try {
+			return await runWithOptionalSoftTimeout();
 		} catch (error) {
 			const aborted = error instanceof Error && error.name === 'AbortError';
 			runtime.aborted = aborted;
 			if (aborted) {
 				runtime.abortedBy = runtime.timedOut ? 'timeout-wrapper' : 'external';
-				posMetrics.incRequestsAborted();
+				// Nunca logout por AbortError/timeout
 			} else {
 				authHandlers?.onOffline();
 			}

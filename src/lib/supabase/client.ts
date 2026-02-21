@@ -1,13 +1,16 @@
 import { env } from '$env/dynamic/public';
 import { createClient } from '@supabase/supabase-js';
-import { createPosFetch, setSupabaseRef } from '$lib/network/supabaseFetch';
+import { createPosFetch } from '$lib/network/supabaseFetch';
 
 const supabaseUrl = env.PUBLIC_SUPABASE_URL ?? '';
 const supabaseAnonKey = env.PUBLIC_SUPABASE_ANON_KEY ?? '';
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+// Ref resuelto después de createClient para que createPosFetch no toque supabase al construir.
+const supabaseRef: { current: ReturnType<typeof createClient> | null } = { current: null };
+
+const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 	global: {
-		fetch: createPosFetch()
+		fetch: createPosFetch(() => supabaseRef.current!)
 	},
 	auth: {
 		persistSession: true,
@@ -16,4 +19,5 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 	}
 });
 
-setSupabaseRef(() => supabase);
+supabaseRef.current = supabase as ReturnType<typeof createClient>;
+export { supabase };

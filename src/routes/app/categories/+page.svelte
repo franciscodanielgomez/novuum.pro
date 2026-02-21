@@ -4,7 +4,6 @@
 	import type { DataTableColumn } from '$lib/components/table';
 	import { api } from '$lib/api';
 	import { asyncGuard } from '$lib/data/asyncGuard';
-	import { refreshTrigger } from '$lib/stores/refreshTrigger';
 	import { toastsStore } from '$lib/stores/toasts';
 	import { posDataCache } from '$lib/pos/cache';
 	import { posDataLog, posDataWarn } from '$lib/pos/diagnostics';
@@ -88,6 +87,7 @@
 		void revalidate();
 
 		const retryIntervalId = setInterval(() => {
+			if (typeof document === 'undefined' || document.visibilityState !== 'visible') return;
 			if (status === 'error') void revalidate();
 		}, RETRY_INTERVAL_MS);
 		const stuckIntervalId = setInterval(() => {
@@ -96,18 +96,10 @@
 			tryPosSelfHealReload(CATEGORIES_SELFHEAL_SCREEN_KEY);
 		}, 2_000);
 
-		let firstRefresh = true;
-		const unsub = refreshTrigger.subscribe(() => {
-			if (firstRefresh) {
-				firstRefresh = false;
-				return;
-			}
-			void revalidate();
-		});
+		// Carga al montar; sin refreshTrigger global (always-on POS).
 		return () => {
 			clearInterval(retryIntervalId);
 			clearInterval(stuckIntervalId);
-			unsub();
 		};
 	});
 

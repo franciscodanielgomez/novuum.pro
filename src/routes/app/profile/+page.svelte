@@ -4,7 +4,6 @@
 	import { api } from '$lib/api';
 	import { supabase } from '$lib/supabase/client';
 	import { removeStorageFileIfOurs } from '$lib/supabase/storage-helpers';
-	import { refreshTrigger } from '$lib/stores/refreshTrigger';
 	import { sessionStore } from '$lib/stores/session';
 	import { toastsStore } from '$lib/stores/toasts';
 	import { onDestroy, onMount } from 'svelte';
@@ -484,7 +483,6 @@
 	};
 
 	onMount(() => {
-		let unsub: (() => void) | null = null;
 		(async () => {
 			const {
 				data: { user }
@@ -527,19 +525,9 @@
 				}
 			}
 			await loadAddresses(user.id);
-
-			let firstRefresh = true;
-			unsub = refreshTrigger.subscribe(() => {
-				if (firstRefresh) {
-					firstRefresh = false;
-					return;
-				}
-				void loadProfileFromApi(user.id);
-			});
+			// Carga al montar; sin refreshTrigger global (always-on POS).
 		})();
-		return () => {
-			unsub?.();
-		};
+		return () => {};
 	});
 </script>
 
