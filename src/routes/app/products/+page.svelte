@@ -67,6 +67,10 @@
 	let targetGroupId = $state<string | null>(null);
 	let expandedGroupId = $state<string | null>(null);
 	let selectedProductIds = $state<string[]>([]);
+	/** Producto a eliminar desde la fila de la tabla (sin abrir el drawer) */
+	let productToDeleteId = $state<string | null>(null);
+	/** Error al cargar asignaciones de grupos en el drawer (para mostrar Reintentar) */
+	let groupsAssignmentsLoadError = $state(false);
 
 	type SortColumn = 'name' | 'category' | 'code' | 'price' | 'state';
 	let sortColumn = $state<SortColumn>('name');
@@ -515,8 +519,8 @@
 		}
 	};
 
-	const removeProduct = async (id: string) => {
-		if (!confirm('¿Eliminar producto? (soft delete)')) return;
+	const removeProduct = async (id: string, skipConfirm = false) => {
+		if (!skipConfirm && !confirm('¿Eliminar producto? (soft delete)')) return;
 		const isSupabaseProduct = supabaseProducts.some((p) => p.id === id);
 		if (isSupabaseProduct) {
 			await asyncGuard(
@@ -707,6 +711,7 @@
 	$effect(() => {
 		if (selectedProduct && detailDrawerOpen) {
 			showImageUrlInput = false;
+			groupsAssignmentsLoadError = false;
 			const categoryIds = 'product_categories' in selectedProduct ? getProductCategoryIds(selectedProduct as SupabaseProduct) : [];
 			const imageUrl = (selectedProduct as SupabaseProduct).image_url?.trim() ?? '';
 			productForm = {
@@ -728,6 +733,7 @@
 					})
 					.catch((e) => {
 						if (!(e instanceof Error && e.name === 'AbortError')) {
+							groupsAssignmentsLoadError = true;
 							toastsStore.error('No se pudieron cargar los grupos del producto');
 						}
 					})
@@ -737,6 +743,20 @@
 			}
 		}
 	});
+
+	const retryGroupsAssignments = () => {
+		if (!selectedProduct) return;
+		groupsAssignmentsLoadError = false;
+		loadProductGroupAssignments(selectedProduct.id)
+			.then((groups) => {
+				productForm = { ...productForm, groups };
+				groupsAssignmentsLoadError = false;
+			})
+			.catch(() => {
+				groupsAssignmentsLoadError = true;
+				toastsStore.error('No se pudieron cargar los grupos del producto');
+			});
+	};
 
 	const toggleCategory = (categoryId: string) => {
 		const idx = productForm.category_ids.indexOf(categoryId);
@@ -982,17 +1002,33 @@
 										</span>
 									</td>
 									<td class="px-3 py-2 text-right">
-										<button
-											type="button"
-											title="Editar"
-											aria-label="Editar"
-											class="inline-flex h-8 w-8 items-center justify-center rounded border border-slate-200 text-slate-600 transition hover:bg-slate-100 dark:border-neutral-600 dark:text-neutral-300 dark:hover:bg-neutral-800"
-											onclick={() => void openEditProduct(product.id)}
-										>
-											<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
-												<path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-											</svg>
-										</button>
+										<div class="inline-flex items-center gap-1">
+											<button
+												type="button"
+												title="Editar"
+												aria-label="Editar"
+												class="inline-flex h-8 w-8 items-center justify-center rounded border border-slate-200 text-slate-600 transition hover:bg-slate-100 dark:border-neutral-600 dark:text-neutral-300 dark:hover:bg-neutral-800"
+												onclick={() => void openEditProduct(product.id)}
+											>
+												<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+													<path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+												</svg>
+											</button>
+											<button
+												type="button"
+												title="Eliminar (desactivar)"
+												aria-label="Eliminar"
+												class="inline-flex h-8 w-8 items-center justify-center rounded border border-slate-200 text-red-600 transition hover:bg-red-50 dark:border-neutral-600 dark:text-red-400 dark:hover:bg-red-950/40"
+												onclick={() => {
+													productToDeleteId = product.id;
+													deleteConfirmOpen = true;
+												}}
+											>
+												<svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+													<path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+												</svg>
+											</button>
+										</div>
 									</td>
 								</tr>
 							{/each}
@@ -1217,7 +1253,14 @@
 					</div>
 
 					{#if useSupabase && supabaseProducts.length > 0}
-						{#if productGroupsList.length === 0}
+						{#if groupsAssignmentsLoadError}
+							<div class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+								No se cargaron las asignaciones de grupos. Podés guardar igual; para volver a cargarlas usá Reintentar.
+								<button type="button" class="btn-primary mt-2 !py-1.5 text-xs" onclick={() => retryGroupsAssignments()}>
+									Reintentar
+								</button>
+							</div>
+						{:else if productGroupsList.length === 0}
 							<div class="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500 dark:border-neutral-800 dark:text-neutral-400">
 								No hay grupos definidos. Creálos en la sección <strong>Grupos</strong> del menú.
 							</div>
@@ -1337,12 +1380,14 @@
 				¿Está seguro que desea eliminar este producto?
 			</p>
 			<div class="flex justify-end gap-2">
-				<Dialog.Close class="btn-secondary">Cancelar</Dialog.Close>
+				<Dialog.Close class="btn-secondary" onclick={() => (productToDeleteId = null)}>Cancelar</Dialog.Close>
 				<button
 					class="btn-danger"
 					onclick={async () => {
-						if (selectedProduct) {
-							await removeProduct(selectedProduct.id);
+						const id = productToDeleteId ?? selectedProduct?.id;
+						if (id) {
+							await removeProduct(id, true);
+							productToDeleteId = null;
 							deleteConfirmOpen = false;
 							detailDrawerOpen = false;
 						}

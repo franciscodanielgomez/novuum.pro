@@ -207,7 +207,8 @@
 			rowId={(c) => c.id}
 			globalSearch={{ keys: ['name'], placeholder: 'Buscar por nombre' }}
 			actions={[
-				{ label: 'Editar', onClick: openEdit, variant: 'secondary', icon: 'edit' }
+				{ label: 'Editar', onClick: openEdit, variant: 'secondary', icon: 'edit' },
+				{ label: 'Eliminar', onClick: (c) => void remove(c.id), variant: 'danger', icon: 'trash' }
 			]}
 			emptyMessage="Aún no hay categorías. Creá una con «Nueva categoría»."
 			loading={loading}
