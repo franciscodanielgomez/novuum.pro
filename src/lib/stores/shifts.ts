@@ -11,6 +11,7 @@ export const shiftsStore = {
 		const open = await api.shifts.getOpen();
 		current.set(open);
 		sessionStore.setShift(open);
+		return open;
 	},
 	open: async (cashierStaffId: string, turn: ShiftTurn) => {
 		const created = await api.shifts.open({ cashierStaffId, turn });

@@ -4,7 +4,7 @@
  */
 
 import type { Order } from '$lib/types';
-import { formatMoney, formatOrderNumber, formatDateDDMMYYYY } from '$lib/utils';
+import { formatMoney, formatOrderDisplay, formatDateDDMMYYYY } from '$lib/utils';
 
 /** Ancho en caracteres: 28 = texto más grande en 58mm (impresión y PDF). */
 const DEFAULT_WIDTH = 28;
@@ -105,7 +105,7 @@ export type TicketVariant = 'original' | 'copia';
 /** Genera el cuerpo común del ticket (sin cabecera Original/Copia). Todo envuelto a 58mm (w chars). */
 function orderTicketBody(order: Order, cadeteName: string, w: number): string[] {
 	const lines: string[] = [
-		...wrap(`No. pedido: ${formatOrderNumber(order.orderNumber)}`, w),
+		...wrap(`No. pedido: ${formatOrderDisplay(order)}`, w),
 		...wrap(`Fecha: ${formatDateDDMMYYYY(order.createdAt)}`, w),
 		...wrap(`Hora: ${order.hour ?? ''}`, w),
 		'',

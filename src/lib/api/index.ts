@@ -1,6 +1,7 @@
 import { catalogRepo } from '$lib/repo/catalogRepo';
 import { businessAddressesRepo } from '$lib/repo/businessAddressesRepo';
 import { businessSettingsRepo } from '$lib/repo/businessSettingsRepo';
+import { customerAddressesRepo } from '$lib/repo/customerAddressesRepo';
 import { customersRepo } from '$lib/repo/customersRepo';
 import { categoriesRepo } from '$lib/repo/categoriesRepo';
 import { groupsRepo } from '$lib/repo/groupsRepo';
@@ -17,6 +18,7 @@ import type { Order, OrderStatus, Shift } from '$lib/types';
 
 export const api = {
 	customers: customersRepo,
+	customerAddresses: customerAddressesRepo,
 	staff: staffRepo,
 	staffGuests: staffGuestsRepo,
 	catalog: catalogRepo,
@@ -44,7 +46,7 @@ export const api = {
 		list: () => shiftsRepo.list(),
 		getOpen: () => shiftsRepo.getOpen(),
 		open: (
-			payload: Omit<Shift, 'id' | 'openedAt' | 'status' | 'totalsByPayment' | 'total' | 'closedAt'>
+			payload: Omit<Shift, 'id' | 'openedAt' | 'status' | 'totalsByPayment' | 'total' | 'closedAt' | 'turnNumber'>
 		) => shiftsRepo.open(payload),
 		close: (id: string, totalsByPayment: Shift['totalsByPayment'], total: number) =>
 			shiftsRepo.close(id, totalsByPayment, total)

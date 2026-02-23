@@ -6,7 +6,7 @@
 import { jsPDF } from 'jspdf';
 import type { Order } from '$lib/types';
 import { orderToTicketText } from '$lib/printing/ticket-layout';
-import { formatOrderNumber } from '$lib/utils';
+import { formatOrderDisplay } from '$lib/utils';
 
 /** Ancho del ticket en mm (58mm = estándar POS). */
 const WIDTH_MM = 58;
@@ -79,6 +79,6 @@ export function downloadOrderTicketPdf(order: Order, cadeteName: string): void {
 	const textDuplicado = orderToTicketText(order, cadeteName, 'copia');
 	drawTicketLines(doc, textDuplicado.split('\n'), x, MARGIN_MM);
 
-	const filename = `pedido-${formatOrderNumber(order.orderNumber)}.pdf`;
+	const filename = `pedido-${formatOrderDisplay(order)}.pdf`;
 	doc.save(filename);
 }

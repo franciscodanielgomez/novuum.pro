@@ -12,13 +12,14 @@
 	import { staffGuestsStore } from '$lib/stores/staffGuests';
 	import { toastsStore } from '$lib/stores/toasts';
 	import type { Order, OrderStatus } from '$lib/types';
-	import { formatMoney, formatDateTime, formatOrderNumber, sameDate, todayYmd, dateInArgentinaYmd } from '$lib/utils';
+	import { formatMoney, formatDateTime, formatOrderDisplay, sameDate, todayYmd, dateInArgentinaYmd } from '$lib/utils';
 	import { isTauri, printTicket } from '$lib/printing/printer';
 	import { orderToTicketText } from '$lib/printing/ticket-layout';
 	import { downloadOrderTicketPdf } from '$lib/printing/ticket-pdf';
 	import { onMount } from 'svelte';
 	import { browser } from '$app/environment';
 	import { get } from 'svelte/store';
+	import { api } from '$lib/api';
 	import { clearPosSelfHealMark, tryPosSelfHealReload } from '$lib/pos/self-heal';
 
 	function ymdToCalendarDate(ymd: string): CalendarDate | undefined {
@@ -50,6 +51,8 @@
 	let query = $state('');
 	let statusFilter = $state<StatusFilterValue>('TODOS');
 	let todayOnly = $state(true);
+	let lastShiftOnly = $state(true);
+	let lastShiftId = $state<string | null>(null);
 	let fechasDropdownOpen = $state(false);
 	let tomadoPorDropdownOpen = $state(false);
 	let asignadoADropdownOpen = $state(false);
@@ -146,6 +149,7 @@
 
 	const activeFilterCount = $derived(
 		(todayOnly ? 1 : 0) +
+			(lastShiftOnly ? 1 : 0) +
 			(filterDateFrom || filterDateTo ? 1 : 0) +
 			(statusFilter !== 'TODOS' ? 1 : 0) +
 			(filterCashier.trim() ? 1 : 0) +
@@ -164,8 +168,8 @@
 
 	const filtered = $derived(
 		$ordersStore.filter((order) => {
-			const orderNumPadded = formatOrderNumber(order.orderNumber);
-			const text = `${order.orderNumber} ${orderNumPadded} ${order.id} ${order.customerPhoneSnapshot} ${order.addressSnapshot}`.toLowerCase();
+			const orderDisplay = formatOrderDisplay(order);
+			const text = `${orderDisplay} ${order.orderNumber} ${order.id} ${order.customerPhoneSnapshot} ${order.addressSnapshot}`.toLowerCase();
 			const matchText = !query.trim() || text.includes(query.trim().toLowerCase());
 			const matchStatus = statusFilter === 'TODOS' || order.status === statusFilter;
 			const matchToday = !todayOnly || sameDate(order.createdAt, todayYmd());
@@ -179,6 +183,7 @@
 				order.assignedStaffId === filterCadeteId ||
 				order.assignedStaffGuestId === filterCadeteId;
 			const matchCustomer = !filterCustomerId || order.customerId === filterCustomerId;
+			const matchLastShift = !lastShiftOnly || (lastShiftId != null && order.shiftId === lastShiftId);
 			return (
 				matchText &&
 				matchStatus &&
@@ -188,7 +193,8 @@
 				matchCashier &&
 				matchCreatedByUser &&
 				matchCadete &&
-				matchCustomer
+				matchCustomer &&
+				matchLastShift
 			);
 		})
 	);
@@ -304,6 +310,7 @@
 	let bulkAssignOpen = $state(false);
 	let bulkCancelConfirmOpen = $state(false);
 	let bulkDeleteConfirmOpen = $state(false);
+	let bulkDeleteLoading = $state(false);
 
 	const bulkAssign = async (cadete: CadeteOption) => {
 		const ids = selectedNoAsignadoIds;
@@ -349,18 +356,23 @@
 
 	const confirmBulkDelete = async () => {
 		const ids = selectedDeletableIds;
+		bulkDeleteLoading = true;
 		let ok = 0;
-		for (const id of ids) {
-			try {
-				await ordersStore.delete(id);
-				ok += 1;
-			} catch {
-				// sigue con el resto
+		try {
+			for (const id of ids) {
+				try {
+					await ordersStore.delete(id);
+					ok += 1;
+				} catch {
+					// sigue con el resto
+				}
 			}
+			bulkDeleteConfirmOpen = false;
+			selectedOrderIds = new Set();
+			toastsStore.success(ok ? `${ok} pedido(s) eliminado(s)` : 'No se pudo eliminar ningún pedido');
+		} finally {
+			bulkDeleteLoading = false;
 		}
-		bulkDeleteConfirmOpen = false;
-		selectedOrderIds = new Set();
-		toastsStore.success(ok ? `${ok} pedido(s) eliminado(s)` : 'No se pudo eliminar ningún pedido');
 	};
 
 	function clearFilters() {
@@ -498,10 +510,10 @@
 		const envio = order.total > subtotal ? order.total - subtotal : 0;
 		const html = `
 <!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Pedido ${formatOrderNumber(order.orderNumber)}</title>
+<html><head><meta charset="utf-8"><title>Pedido ${formatOrderDisplay(order)}</title>
 <style>body{font-family:system-ui,sans-serif;padding:1rem;font-size:14px;} table{width:100%;border-collapse:collapse;} th,td{border:1px solid #ccc;padding:6px 8px;text-align:left;} th{background:#f5f5f5;} .total{font-weight:bold;}</style>
 </head><body>
-<h2>Pedido #${formatOrderNumber(order.orderNumber)}</h2>
+<h2>Pedido #${formatOrderDisplay(order)}</h2>
 <p><strong>Fecha:</strong> ${formatDateTime(order.createdAt)}</p>
 <p><strong>Cliente:</strong> ${order.customerPhoneSnapshot}</p>
 <p><strong>Dirección:</strong> ${order.addressSnapshot}</p>
@@ -542,6 +554,9 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 		if (browser && import.meta.env.DEV) console.debug('[route:orders] mount start');
 		loadStartedAt = Date.now();
 		void loadOrdersData();
+		void api.shifts.list().then((list) => {
+			if (list.length) lastShiftId = list[0].id;
+		});
 		const stopRetry = ordersStore.startRetryLoop();
 		// Carga al montar; sin refreshTrigger global (always-on POS).
 			const stuckIntervalId = setInterval(() => {
@@ -630,6 +645,20 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 						}}
 					>
 						Hoy
+					</button>
+					<button
+						type="button"
+						class="rounded-md border px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 {lastShiftOnly
+							? 'border-slate-800 bg-slate-800 text-white hover:bg-slate-700 dark:border-slate-600 dark:bg-slate-600 dark:hover:bg-slate-500'
+							: 'border-slate-400 text-slate-700 hover:bg-slate-100 dark:border-slate-500 dark:text-slate-300 dark:hover:bg-slate-700'}"
+						aria-pressed={lastShiftOnly}
+						onclick={() => {
+							lastShiftOnly = !lastShiftOnly;
+							pageIndex = 0;
+							persist();
+						}}
+					>
+						Último turno
 					</button>
 					{#each STATUS_OPTIONS as status}
 						<StatusFilterButton
@@ -1076,11 +1105,11 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 									class="rounded border-slate-300"
 									checked={selectedOrderIds.has(order.id)}
 									onchange={() => toggleSelectOrder(order.id)}
-									aria-label="Seleccionar pedido #{order.orderNumber}"
+									aria-label="Seleccionar pedido #{formatOrderDisplay(order)}"
 								/>
 							</td>
 							{#if isColumnVisible('num')}
-								<td class="whitespace-nowrap px-3 py-2">{formatOrderNumber(order.orderNumber)}</td>
+								<td class="whitespace-nowrap px-3 py-2">{formatOrderDisplay(order)}</td>
 							{/if}
 							{#if isColumnVisible('fecha')}
 								<td class="whitespace-nowrap px-3 py-2">{formatDateTime(order.createdAt)}</td>
@@ -1363,17 +1392,24 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-labelledby="bulk-delete-title">
 		<div class="max-w-sm rounded-xl bg-white p-4 shadow-xl dark:bg-neutral-800">
 			<h2 id="bulk-delete-title" class="text-base font-semibold">¿Eliminar pedidos?</h2>
-			<p class="mt-2 text-sm text-slate-600 dark:text-slate-400">
-				Se eliminarán {selectedDeletableIds.length} pedido(s) (borradores y cancelados). Esta acción no se puede deshacer. ¿Continuar?
-			</p>
-			<div class="mt-4 flex justify-end gap-2">
-				<button type="button" class="btn-secondary" onclick={() => (bulkDeleteConfirmOpen = false)}>
-					No
-				</button>
-				<button type="button" class="btn-danger" onclick={() => confirmBulkDelete()}>
-					Sí, eliminar
-				</button>
-			</div>
+			{#if bulkDeleteLoading}
+				<div class="mt-4 flex flex-col items-center justify-center gap-3 py-4">
+					<div class="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-blue-600 dark:border-neutral-600 dark:border-t-blue-400" aria-hidden="true"></div>
+					<p class="text-sm text-slate-600 dark:text-slate-400">Eliminando pedidos…</p>
+				</div>
+			{:else}
+				<p class="mt-2 text-sm text-slate-600 dark:text-slate-400">
+					Se eliminarán {selectedDeletableIds.length} pedido(s) (borradores y cancelados). Esta acción no se puede deshacer. ¿Continuar?
+				</p>
+				<div class="mt-4 flex justify-end gap-2">
+					<button type="button" class="btn-secondary" onclick={() => (bulkDeleteConfirmOpen = false)}>
+						No
+					</button>
+					<button type="button" class="btn-danger" onclick={() => confirmBulkDelete()}>
+						Sí, eliminar
+					</button>
+				</div>
+			{/if}
 		</div>
 	</div>
 {/if}
@@ -1389,7 +1425,7 @@ ${envio > 0 ? `<p>Envío: ${formatMoney(envio)}</p>` : ''}
 				</div>
 				<div>
 					<dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Número de pedido</dt>
-					<dd class="text-xs">#{formatOrderNumber(selectedOrder.orderNumber)}</dd>
+					<dd class="text-xs">#{formatOrderDisplay(selectedOrder)}</dd>
 				</div>
 				<div>
 					<dt class="text-xs font-medium text-slate-500 dark:text-slate-400">Cliente</dt>

@@ -40,6 +40,7 @@
 		loading = false,
 		emptyMessage = 'Sin resultados',
 		persistState = true,
+		resetPageWhen,
 		toolbarLeft,
 		toolbarActions
 	}: Props = $props();
@@ -69,6 +70,16 @@
 	let pagination = $state({
 		pageIndex: 0,
 		pageSize: defaultPageSize
+	});
+
+	// Cuando el padre cambia el criterio de búsqueda (resetPageWhen), volver a la página 1.
+	let prevResetPageWhen = $state<unknown>(Symbol('initial'));
+	$effect(() => {
+		const current = resetPageWhen;
+		if (prevResetPageWhen !== Symbol('initial') && prevResetPageWhen !== current) {
+			pagination = { ...pagination, pageIndex: 0 };
+		}
+		prevResetPageWhen = current;
 	});
 
 	// Apply persisted state only on client after mount to avoid hydration mismatch.

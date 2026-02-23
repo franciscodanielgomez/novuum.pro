@@ -8,10 +8,16 @@ import LogoNovuum from '$lib/components/LogoNovuum.svelte';
 import { businessStore } from '$lib/stores/business';
 	import { subscribeReturnToApp, runReturnToAppHandshake } from '$lib/app/returnToApp';
 	import { sessionStore } from '$lib/stores/session';
+	import { shiftsStore } from '$lib/stores/shifts';
+	import { staffStore } from '$lib/stores/staff';
+	import { staffGuestsStore } from '$lib/stores/staffGuests';
 	import { themeStore } from '$lib/stores/theme';
+	import { toastsStore } from '$lib/stores/toasts';
 	import { uiStore } from '$lib/stores/uiStore';
 	import { updateStore } from '$lib/stores/updateStore';
+	import type { ShiftTurn } from '$lib/types';
 	import { onMount, tick } from 'svelte';
+	import { get } from 'svelte/store';
 
 	let { children } = $props();
 	let sidebarCollapsed = $state(false);
@@ -19,6 +25,54 @@ import { businessStore } from '$lib/stores/business';
 	let businessMenuOpen = $state(false);
 	let avatarButtonRef: HTMLButtonElement | undefined = $state();
 	let avatarDropdownStyle = $state<{ bottom: string; left: string }>({ bottom: '0', left: '0' });
+	let openShiftModalOpen = $state(false);
+	let noShiftModalOpen = $state(false);
+	let closeShiftModalOpen = $state(false);
+	let openShiftTurn: ShiftTurn = 'MAÑANA';
+	let openShiftCashierId = $state('');
+	let shiftElapsedSeconds = $state(0);
+
+	function goToCreateOrder(query?: string) {
+		if (!get(sessionStore).shift) {
+			noShiftModalOpen = true;
+			return;
+		}
+		goto(query ? `/app/create_order?${query}` : '/app/create_order');
+	}
+
+	function formatShiftElapsed(sec: number): string {
+		const h = Math.floor(sec / 3600);
+		const m = Math.floor((sec % 3600) / 60);
+		const s = sec % 60;
+		return [h, m, s].map((n) => String(n).padStart(2, '0')).join(':');
+	}
+
+	function formatShiftHoursWorked(sec: number): string {
+		const h = Math.floor(sec / 3600);
+		const m = Math.floor((sec % 3600) / 60);
+		if (h > 0 && m > 0) return `${h} ${h === 1 ? 'hora' : 'horas'} y ${m} ${m === 1 ? 'minuto' : 'minutos'}`;
+		if (h > 0) return `${h} ${h === 1 ? 'hora' : 'horas'}`;
+		if (m > 0) return `${m} ${m === 1 ? 'minuto' : 'minutos'}`;
+		return 'pocos segundos';
+	}
+
+	async function openShiftFromModal() {
+		if (!openShiftCashierId) {
+			toastsStore.error('Seleccioná un cajero');
+			return;
+		}
+		const created = await shiftsStore.open(openShiftCashierId, openShiftTurn);
+		openShiftModalOpen = false;
+		openShiftCashierId = '';
+		toastsStore.success(`Turno T${created.turnNumber} abierto`);
+	}
+
+	function closeShiftFromHeader() {
+		const shift = get(sessionStore).shift;
+		if (!shift) return;
+		shiftsStore.close(shift.id, shift.totalsByPayment, shift.total);
+		toastsStore.success('Turno cerrado');
+	}
 
 	$effect(() => {
 		if (avatarMenuOpen && avatarButtonRef) {
@@ -84,6 +138,7 @@ import { businessStore } from '$lib/stores/business';
 			title: 'Administración',
 			items: [
 				{ href: '/app/business', label: 'Negocio', icon: 'negocio' },
+				{ href: '/app/shifts', label: 'Turnos', icon: 'config' },
 				{ href: '/app/team', label: 'Equipo', icon: 'equipo' },
 				{ href: '/app/settings', label: 'Configuraciones', icon: 'config' }
 			]
@@ -114,6 +169,8 @@ import { businessStore } from '$lib/stores/business';
 					}
 					// Si ya hay user en store, no hidratar de nuevo (evita cascadas y competencia por lock).
 					await businessStore.load();
+					await shiftsStore.loadOpen();
+					await Promise.all([staffStore.load(), staffGuestsStore.load()]);
 				} catch (e) {
 					if (dev) console.debug('[route:app-layout] mount async error', e);
 				} finally {
@@ -126,11 +183,28 @@ import { businessStore } from '$lib/stores/business';
 				desktopDownloadStore.init();
 			}
 
+			// Reloj del turno: actualizar cada segundo cuando hay turno abierto.
+			const tid = setInterval(() => {
+				const s = get(sessionStore);
+				if (s.shift?.openedAt) {
+					shiftElapsedSeconds = Math.floor(
+						(Date.now() - new Date(s.shift.openedAt).getTime()) / 1000
+					);
+				}
+			}, 1000);
+
+			// Sincronizar turno abierto con el servidor cada 30 s para que todos los usuarios vean el mismo estado.
+			const shiftSyncId = setInterval(() => {
+				void shiftsStore.loadOpen();
+			}, 30_000);
+
 			// Return-to-app: solo verificar sesión al volver visible (cooldown y modal/formDirty en returnToApp.ts).
 			const unsubReturn = subscribeReturnToApp(() => runHandshakeWithReason('returnToApp'));
 
 			return () => {
 				if (dev) console.debug('[route:app-layout] cleanup');
+				clearInterval(tid);
+				clearInterval(shiftSyncId);
 				unsubReturn();
 			};
 		});
@@ -601,32 +675,217 @@ import { businessStore } from '$lib/stores/business';
 						{$desktopDownloadStore.loading ? '…' : 'Descargar Desktop'}
 					</a>
 				{/if}
+				{#if $sessionStore.shift}
+					<span
+						class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 font-mono text-sm tabular-nums text-slate-700 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300"
+						title="Tiempo de turno abierto"
+					>
+						{formatShiftElapsed(shiftElapsedSeconds)}
+					</span>
+					<button
+						type="button"
+						class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-neutral-600 dark:bg-black dark:text-neutral-200 dark:hover:bg-neutral-900"
+						onclick={() => (closeShiftModalOpen = true)}
+					>
+						Cerrar turno
+					</button>
+				{:else}
+					<button
+						type="button"
+						class="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-black dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+						onclick={() => (openShiftModalOpen = true)}
+					>
+						Abrir Turno
+					</button>
+				{/if}
 			{#if $page.url.pathname !== '/app/create_order'}
-				<a
+				<button
+					type="button"
 					class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-700 transition hover:bg-slate-50 dark:border-neutral-600 dark:bg-black dark:text-neutral-200 dark:hover:bg-neutral-900"
-					href="/app/create_order"
 					aria-label="POS - Crear pedido"
 					title="POS - Crear pedido"
+					onclick={() => goToCreateOrder()}
 				>
 					<svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
 						<path d="M3 10l2-5h14l2 5" />
 						<path d="M4 10v9h16v-9" />
 						<path d="M9 19v-5h6v5" />
 					</svg>
-				</a>
-				<a
+				</button>
+				<button
+					type="button"
 					class="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-slate-900 text-lg font-semibold text-white transition hover:bg-black dark:bg-white dark:text-black dark:hover:bg-neutral-200"
-					href="/app/create_order?openClientModal=1"
 					aria-label="Crear pedido"
 					title="Crear pedido"
+					onclick={() => goToCreateOrder('openClientModal=1')}
 				>
 					<span aria-hidden="true">+</span>
-				</a>
+				</button>
 			{/if}
 			</div>
 		</header>
 
 		<main class="min-h-0 flex-1 overflow-y-auto p-4 md:p-6">{@render children()}</main>
 	</div>
+
+	{#if closeShiftModalOpen}
+		<div
+			class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="modal-cerrar-turno-title"
+			onclick={(e) => e.target === e.currentTarget && (closeShiftModalOpen = false)}
+			onkeydown={(e) => e.key === 'Escape' && (closeShiftModalOpen = false)}
+		>
+			<div
+				class="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-neutral-700 dark:bg-neutral-900"
+				onclick={(e) => e.stopPropagation()}
+			>
+				<h2 id="modal-cerrar-turno-title" class="text-lg font-semibold text-slate-900 dark:text-white">
+					Cerrar turno
+				</h2>
+				<p class="mt-2 text-sm text-slate-600 dark:text-neutral-400">
+					En este turno se trabajaron <strong>{formatShiftHoursWorked(shiftElapsedSeconds)}</strong>. ¿Seguro que desea cerrar el turno?
+				</p>
+				<div class="mt-6 flex justify-end gap-2">
+					<button
+						type="button"
+						class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+						onclick={() => (closeShiftModalOpen = false)}
+					>
+						Cancelar
+					</button>
+					<button
+						type="button"
+						class="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-black dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+						onclick={() => {
+							closeShiftModalOpen = false;
+							closeShiftFromHeader();
+						}}
+					>
+						Sí, cerrar turno
+					</button>
+				</div>
+			</div>
+		</div>
+	{/if}
+	{#if noShiftModalOpen}
+		<div
+			class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="modal-sin-turno-title"
+			onclick={(e) => e.target === e.currentTarget && (noShiftModalOpen = false)}
+			onkeydown={(e) => e.key === 'Escape' && (noShiftModalOpen = false)}
+		>
+			<div
+				class="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-neutral-700 dark:bg-neutral-900"
+				onclick={(e) => e.stopPropagation()}
+			>
+				<h2 id="modal-sin-turno-title" class="text-lg font-semibold text-slate-900 dark:text-white">
+					Turno requerido
+				</h2>
+				<p class="mt-2 text-sm text-slate-600 dark:text-neutral-400">
+					Usted debe crear un turno para comenzar a realizar pedidos.
+				</p>
+				<div class="mt-6 flex justify-end gap-2">
+					<button
+						type="button"
+						class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+						onclick={() => (noShiftModalOpen = false)}
+					>
+						Cerrar
+					</button>
+					<button
+						type="button"
+						class="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-black dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+						onclick={() => {
+							noShiftModalOpen = false;
+							openShiftModalOpen = true;
+						}}
+					>
+						Abrir turno
+					</button>
+				</div>
+			</div>
+		</div>
+	{/if}
+	{#if openShiftModalOpen}
+		<div
+			class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="modal-abrir-turno-title"
+			onclick={(e) => e.target === e.currentTarget && (openShiftModalOpen = false)}
+			onkeydown={(e) => e.key === 'Escape' && (openShiftModalOpen = false)}
+		>
+			<div
+				class="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-neutral-700 dark:bg-neutral-900"
+				onclick={(e) => e.stopPropagation()}
+			>
+				<h2 id="modal-abrir-turno-title" class="text-lg font-semibold text-slate-900 dark:text-white">
+					Abrir turno
+				</h2>
+				<p class="mt-1 text-sm text-slate-600 dark:text-neutral-400">
+					Elegí el turno y el cajero para que los pedidos usen el número de turno (ej. T1-1, T1-2…).
+				</p>
+				<div class="mt-4 space-y-4">
+					<div>
+						<label for="open-shift-turn" class="block text-sm font-medium text-slate-700 dark:text-neutral-300">
+							Turno (mañana/tarde/noche)
+						</label>
+						<select
+							id="open-shift-turn"
+							class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 dark:border-neutral-600 dark:bg-neutral-800 dark:text-white"
+							bind:value={openShiftTurn}
+						>
+							<option value="MAÑANA">Mañana</option>
+							<option value="TARDE">Tarde</option>
+							<option value="NOCHE">Noche</option>
+						</select>
+					</div>
+					<div>
+						<label for="open-shift-cajero" class="block text-sm font-medium text-slate-700 dark:text-neutral-300">
+							Cajero
+						</label>
+						<select
+							id="open-shift-cajero"
+							class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-slate-900 dark:border-neutral-600 dark:bg-neutral-800 dark:text-white"
+							bind:value={openShiftCashierId}
+						>
+							<option value="">Seleccionar</option>
+							{#each (() => {
+								const staff = ($staffStore || []).filter(
+									(s) => s.active && (s.roles ?? [s.role]).some((r) => r === 'CAJERO')
+								);
+								const guests = ($staffGuestsStore || []).filter(
+									(g) => g.active && (g.roles ?? [g.role]).some((r) => r === 'CAJERO')
+								);
+								return [...staff, ...guests].sort((a, b) => a.name.localeCompare(b.name));
+							})() as cashier}
+								<option value={cashier.id}>{cashier.name}</option>
+							{/each}
+						</select>
+					</div>
+				</div>
+				<div class="mt-6 flex justify-end gap-2">
+					<button
+						type="button"
+						class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+						onclick={() => (openShiftModalOpen = false)}
+					>
+						Cancelar
+					</button>
+					<button
+						type="button"
+						class="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-black dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+						onclick={() => openShiftFromModal()}
+					>
+						Abrir turno
+					</button>
+				</div>
+			</div>
+		</div>
+	{/if}
 </div>
 {/if}

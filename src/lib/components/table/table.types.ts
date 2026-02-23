@@ -93,6 +93,8 @@ export interface DataTableProps<TData> {
 	loading?: boolean;
 	emptyMessage?: string;
 	persistState?: boolean;
+	/** Si cambia, la tabla vuelve a la página 1 (útil cuando el padre filtra los datos por búsqueda). */
+	resetPageWhen?: unknown;
 	/** Contenido a la izquierda de la barra de herramientas (ej. buscador). */
 	toolbarLeft?: Snippet;
 	/** Contenido extra en la barra de herramientas (a la izquierda de Columnas). */

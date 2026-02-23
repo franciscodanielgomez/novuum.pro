@@ -22,10 +22,13 @@ type OrderRow = {
 	cashier_name_snapshot: string | null;
 	created_at: string;
 	updated_at: string;
+	shift_id: string | null;
+	sequence_in_shift: number | null;
+	shift_turn_number: number | null;
 };
 
 const ORDER_COLUMNS =
-	'id, order_number, customer_id, customer_phone_snapshot, address_snapshot, between_streets_snapshot, status, assigned_staff_id, assigned_staff_guest_id, payment_method, cash_received, change_due, notes, delivery_cost, total, created_by_user_id, cashier_name_snapshot, created_at, updated_at';
+	'id, order_number, customer_id, customer_phone_snapshot, address_snapshot, between_streets_snapshot, status, assigned_staff_id, assigned_staff_guest_id, payment_method, cash_received, change_due, notes, delivery_cost, total, created_by_user_id, cashier_name_snapshot, created_at, updated_at, shift_id, sequence_in_shift, shift_turn_number';
 
 type OrderItemRow = {
 	id: string;
@@ -68,6 +71,9 @@ function rowToOrder(row: OrderRow, items: OrderItem[]): Order {
 		total: Number(row.total),
 		createdByUserId: row.created_by_user_id ?? undefined,
 		cashierNameSnapshot: row.cashier_name_snapshot ?? undefined,
+		shiftId: row.shift_id ?? undefined,
+		orderSequenceInShift: row.sequence_in_shift ?? undefined,
+		shiftTurnNumber: row.shift_turn_number ?? undefined,
 		items
 	};
 }
@@ -141,6 +147,24 @@ export const ordersRepo = {
 	},
 
 	async create(payload: Omit<Order, 'id' | 'orderNumber' | 'createdAt' | 'hour'>): Promise<Order> {
+		let sequenceInShift: number | null = null;
+		let shiftId: string | null = null;
+		let shiftTurnNumber: number | null = null;
+		if (payload.shiftId && payload.shiftTurnNumber != null) {
+			shiftId = payload.shiftId;
+			shiftTurnNumber = payload.shiftTurnNumber;
+			const existing = await dbSelect<{ id: string }[]>(
+				'orders',
+				({ signal, client }) =>
+					client
+						.from('orders')
+						.select('id')
+						.eq('shift_id', payload.shiftId!)
+						.abortSignal(signal),
+				{ source: 'ordersRepo.createCountByShift' }
+			);
+			sequenceInShift = (existing?.length ?? 0) + 1;
+		}
 		const orderRow = await dbInsert<OrderRow>(
 			'orders',
 			{
@@ -158,7 +182,10 @@ export const ordersRepo = {
 				delivery_cost: payload.deliveryCost ?? 0,
 				total: payload.total ?? 0,
 				created_by_user_id: payload.createdByUserId || null,
-				cashier_name_snapshot: payload.cashierNameSnapshot?.trim() || null
+				cashier_name_snapshot: payload.cashierNameSnapshot?.trim() || null,
+				shift_id: shiftId,
+				sequence_in_shift: sequenceInShift,
+				shift_turn_number: shiftTurnNumber
 			},
 			({ signal, client, payload: row }) =>
 				client.from('orders').insert(row).select(ORDER_COLUMNS).abortSignal(signal).single(),

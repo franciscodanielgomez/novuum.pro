@@ -4,7 +4,7 @@
 	import { staffStore } from '$lib/stores/staff';
 	import { toastsStore } from '$lib/stores/toasts';
 	import type { PaymentMethod, ShiftTurn } from '$lib/types';
-	import { formatMoney } from '$lib/utils';
+	import { formatMoney, formatOrderDisplay } from '$lib/utils';
 	import { onMount } from 'svelte';
 
 	let openTurn: ShiftTurn = 'MAÑANA';
@@ -122,7 +122,7 @@
 					<tbody>
 						{#each shiftOrders as order}
 							<tr class="border-t border-slate-100">
-								<td class="px-3 py-2">#{order.orderNumber}</td>
+								<td class="px-3 py-2">#{formatOrderDisplay(order)}</td>
 								<td class="px-3 py-2">{order.status}</td>
 								<td class="px-3 py-2">{order.paymentMethod}</td>
 								<td class="px-3 py-2">{formatMoney(order.total)}</td>

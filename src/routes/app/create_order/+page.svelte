@@ -20,12 +20,14 @@
 	import { uiStore } from '$lib/stores/uiStore';
 	import { printTicket } from '$lib/printing/printer';
 	import { orderToTicketText } from '$lib/printing/ticket-layout';
+	import type { CustomerAddress } from '$lib/repo/customerAddressesRepo';
 	import type { Customer, Order, OrderDraft, OrderItem, PaymentMethod, Product, SKU } from '$lib/types';
-	import { generateId, formatMoney } from '$lib/utils';
+	import { generateId, formatMoney, formatOrderDisplay } from '$lib/utils';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import { tick } from 'svelte';
 	import { onMount } from 'svelte';
+	import { get } from 'svelte/store';
 	import {
 		createOrderDraftsStore as draftsStore,
 		DRAFTS_STORAGE_KEY,
@@ -80,6 +82,14 @@
 	let existingCustomerByPhoneLookupLoading = $state(false);
 	let existingCustomerByPhoneLookupFor = $state('');
 	let newClientForm = $state({ phone: '', address: '', betweenStreets: '', notes: '' });
+	/** Paso del modal cliente: buscar o elegir dirección para el cliente elegido */
+	let clientModalStep = $state<'search' | 'chooseAddress'>('search');
+	let clientModalChosenCustomer = $state<Customer | null>(null);
+	let clientModalExtraAddresses = $state<CustomerAddress[]>([]);
+	let clientModalExtraAddressesLoading = $state(false);
+	let clientModalShowAddAddressForm = $state(false);
+	let clientModalNewAddressForm = $state({ addressLine: '', betweenStreets: '', notes: '' });
+	let clientModalAddingAddress = $state(false);
 	let configOpen = $state(false);
 	let configLoading = $state(false);
 	let configLoadController: AbortController | null = null;
@@ -251,7 +261,8 @@
 			customerPhoneSnapshot: order.customerPhoneSnapshot,
 			addressSnapshot: order.addressSnapshot,
 			betweenStreetsSnapshot: order.betweenStreetsSnapshot,
-			orderId: order.id
+			orderId: order.id,
+			orderDisplayNumber: formatOrderDisplay(order)
 		};
 	}
 
@@ -354,6 +365,10 @@
 
 	/** Cliente existente al agregar uno nuevo: de la lista O búsqueda directa por teléfono (para no permitir duplicados) */
 	const existingCustomerWhenAdding = $derived(existingCustomerWithPhone ?? existingCustomerByPhoneLookup);
+
+	$effect(() => {
+		if (!clientModalOpen) closeChooseAddress();
+	});
 
 	/** Si la lista filtrada está vacía y el usuario escribió 2+ caracteres, buscar por API (teléfono, dirección o texto) */
 	let lookupSearchTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -465,31 +480,89 @@
 		void customersStore.revalidate();
 	};
 
-	const selectClient = async (customer: Customer) => {
+	/** Abre el paso de elegir dirección para este cliente (principal, otra existente o agregar nueva). */
+	async function openChooseAddress(customer: Customer) {
+		clientModalChosenCustomer = customer;
+		clientModalStep = 'chooseAddress';
+		addClientMode = false;
+		clientModalShowAddAddressForm = false;
+		clientModalNewAddressForm = { addressLine: '', betweenStreets: '', notes: '' };
+		clientModalExtraAddresses = [];
+		clientModalExtraAddressesLoading = true;
+		try {
+			clientModalExtraAddresses = await api.customerAddresses.listByCustomerId(customer.id);
+		} catch {
+			clientModalExtraAddresses = [];
+		} finally {
+			clientModalExtraAddressesLoading = false;
+		}
+	}
+
+	function closeChooseAddress() {
+		clientModalStep = 'search';
+		clientModalChosenCustomer = null;
+		clientModalExtraAddresses = [];
+		clientModalShowAddAddressForm = false;
+	}
+
+	async function submitClientModalNewAddress() {
+		const cust = clientModalChosenCustomer;
+		if (!cust || !clientModalNewAddressForm.addressLine.trim()) {
+			toastsStore.error('Escribí la dirección');
+			return;
+		}
+		clientModalAddingAddress = true;
+		try {
+			const created = await api.customerAddresses.create({
+				customerId: cust.id,
+				addressLine: clientModalNewAddressForm.addressLine.trim(),
+				betweenStreets: clientModalNewAddressForm.betweenStreets.trim() || undefined,
+				notes: clientModalNewAddressForm.notes.trim() || undefined
+			});
+			clientModalExtraAddresses = [...clientModalExtraAddresses, created];
+			await selectClientWithAddress(
+				cust,
+				created.addressLine,
+				created.betweenStreets
+			);
+		} catch (e) {
+			toastsStore.error(e instanceof Error ? e.message : 'No se pudo agregar la dirección');
+		} finally {
+			clientModalAddingAddress = false;
+		}
+	}
+
+	/** Aplica el cliente con la dirección elegida (principal, extra o recién agregada) y cierra el modal. */
+	const selectClientWithAddress = async (
+		customer: Customer,
+		addressSnapshot: string,
+		betweenStreetsSnapshot?: string
+	) => {
 		// Asignar cliente al borrador actual (cambio de cliente o borrador sin cliente)
 		if ((clientModalForChange || (activeDraft && !activeDraft.selectedCustomerId)) && activeDraft) {
 			const updater = (draft: OrderDraft) => ({
 				...draft,
 				selectedCustomerId: customer.id,
 				customerPhoneSnapshot: customer.phone,
-				addressSnapshot: customer.address,
-				betweenStreetsSnapshot: customer.betweenStreets
+				addressSnapshot,
+				betweenStreetsSnapshot: betweenStreetsSnapshot ?? customer.betweenStreets
 			});
 			updateActiveDraft(updater);
 			if (activeDraft.orderId) {
 				await ordersStore.update(activeDraft.orderId, {
 					customerId: customer.id,
 					customerPhoneSnapshot: customer.phone,
-					addressSnapshot: customer.address,
-					betweenStreetsSnapshot: customer.betweenStreets
+					addressSnapshot,
+					betweenStreetsSnapshot: betweenStreetsSnapshot ?? customer.betweenStreets
 				});
 			}
 			clientModalOpen = false;
 			clientModalForChange = false;
 			addClientMode = false;
+			closeChooseAddress();
 			return;
 		}
-		// Crear nuevo borrador con este cliente
+		// Crear nuevo borrador con este cliente y la dirección elegida
 		clientModalSaving = true;
 		try {
 			draftCount += 1;
@@ -498,8 +571,8 @@
 				...newDraft,
 				selectedCustomerId: customer.id,
 				customerPhoneSnapshot: customer.phone,
-				addressSnapshot: customer.address,
-				betweenStreetsSnapshot: customer.betweenStreets
+				addressSnapshot,
+				betweenStreetsSnapshot: betweenStreetsSnapshot ?? customer.betweenStreets
 			};
 			draftsStore.addDraft(newDraftWithClient);
 			draftsList = draftsStore.current.slice();
@@ -519,24 +592,34 @@
 			await new Promise((r) => setTimeout(r, 150));
 			await tick();
 			clientModalOpen = false;
+			closeChooseAddress();
 			// Crear pedido BORRADOR en el repo en segundo plano y asignar orderId al draft
 			void (async () => {
 				try {
+					if (!get(sessionStore).shift) {
+						toastsStore.error('Tenés que abrir un turno para crear pedidos');
+						return;
+					}
 					const created = await ordersStore.create({
 						customerId: customer.id,
 						customerPhoneSnapshot: customer.phone,
-						addressSnapshot: customer.address,
-						betweenStreetsSnapshot: customer.betweenStreets,
+						addressSnapshot,
+						betweenStreetsSnapshot: betweenStreetsSnapshot ?? customer.betweenStreets,
 						status: 'BORRADOR',
 						paymentMethod: newDraft.paymentMethod,
 						total: 0,
 						items: [],
 						createdByUserId: $sessionStore.user?.id,
 						cashierNameSnapshot: $sessionStore.user?.name,
-						shiftId: $sessionStore.shift?.id
+						shiftId: $sessionStore.shift?.id,
+						shiftTurnNumber: $sessionStore.shift?.turnNumber
 					});
 					draftsStore.update((prev) =>
-						prev.map((d) => (d.id === newDraft.id ? { ...d, orderId: created.id } : d))
+						prev.map((d) =>
+							d.id === newDraft.id
+								? { ...d, orderId: created.id, orderDisplayNumber: formatOrderDisplay(created) }
+								: d
+						)
 					);
 				} catch {
 					toastsStore.error('No se pudo crear el pedido en borrador');
@@ -545,6 +628,10 @@
 		} finally {
 			clientModalSaving = false;
 		}
+	};
+
+	const selectClient = (customer: Customer) => {
+		openChooseAddress(customer);
 	};
 
 	const addNewClient = async () => {
@@ -570,6 +657,37 @@
 		}
 	};
 
+	type EditClientAddrItem =
+		| { id: 'main'; addressLine: string; betweenStreets: string; notes: string; isMain: true }
+		| { id: string; addressLine: string; betweenStreets: string; notes: string; isMain: false };
+
+	let editClientExtraAddresses = $state<CustomerAddress[]>([]);
+	let editClientNewAddressLine = $state('');
+	let editClientNewAddressBetweenStreets = $state('');
+	let editClientNewAddressNotes = $state('');
+	let editClientAddingAddress = $state(false);
+	let editClientEditingAddressId = $state<string | null>(null);
+	let editClientEditForm = $state({ addressLine: '', betweenStreets: '', notes: '' });
+	let editClientSavingAddress = $state(false);
+
+	const editClientAllAddresses = $derived.by((): EditClientAddrItem[] => {
+		const main: EditClientAddrItem = {
+			id: 'main',
+			addressLine: editClientForm.address,
+			betweenStreets: editClientForm.betweenStreets ?? '',
+			notes: editClientForm.notes ?? '',
+			isMain: true
+		};
+		const others: EditClientAddrItem[] = editClientExtraAddresses.map((a) => ({
+			id: a.id,
+			addressLine: a.addressLine,
+			betweenStreets: a.betweenStreets ?? '',
+			notes: a.notes ?? '',
+			isMain: false as const
+		}));
+		return [main, ...others];
+	});
+
 	const openEditClientInPos = (customer: Customer) => {
 		clientCardMenuOpen = false;
 		editClientCustomer = customer;
@@ -579,8 +697,151 @@
 			betweenStreets: customer.betweenStreets ?? '',
 			notes: customer.notes ?? ''
 		};
+		editClientExtraAddresses = [];
+		editClientNewAddressLine = '';
+		editClientNewAddressBetweenStreets = '';
+		editClientNewAddressNotes = '';
+		editClientEditingAddressId = null;
+		void api.customerAddresses.listByCustomerId(customer.id).then((list) => {
+			editClientExtraAddresses = list;
+		});
 		editClientModalOpen = true;
 	};
+
+	function useEditClientAddressForOrder(item: EditClientAddrItem) {
+		if (!activeDraft) return;
+		updateActiveDraft((draft) => ({
+			...draft,
+			addressSnapshot: item.addressLine,
+			betweenStreetsSnapshot: item.betweenStreets || undefined
+		}));
+		if (activeDraft.orderId) {
+			void ordersStore.update(activeDraft.orderId, {
+				addressSnapshot: item.addressLine,
+				betweenStreetsSnapshot: item.betweenStreets || undefined
+			});
+		}
+		toastsStore.success('Dirección usada para este pedido');
+	}
+
+	function editClientAddressUsedForOrder(item: EditClientAddrItem): boolean {
+		if (!activeDraft) return false;
+		const a = (activeDraft.addressSnapshot ?? '').trim();
+		const b = (activeDraft.betweenStreetsSnapshot ?? '').trim();
+		return a === item.addressLine.trim() && b === item.betweenStreets.trim();
+	}
+
+	function startEditClientAddress(item: EditClientAddrItem) {
+		editClientEditingAddressId = item.id;
+		editClientEditForm = {
+			addressLine: item.addressLine,
+			betweenStreets: item.betweenStreets,
+			notes: item.notes
+		};
+	}
+
+	function cancelEditClientAddress() {
+		editClientEditingAddressId = null;
+	}
+
+	async function saveEditClientAddress() {
+		if (editClientEditingAddressId === null) return;
+		if (editClientEditingAddressId === 'main') {
+			editClientForm = {
+				...editClientForm,
+				address: editClientEditForm.addressLine,
+				betweenStreets: editClientEditForm.betweenStreets,
+				notes: editClientEditForm.notes
+			};
+			editClientEditingAddressId = null;
+			toastsStore.success('Dirección principal actualizada');
+			return;
+		}
+		editClientSavingAddress = true;
+		try {
+			const updated = await api.customerAddresses.update(editClientEditingAddressId, {
+				addressLine: editClientEditForm.addressLine.trim(),
+				betweenStreets: editClientEditForm.betweenStreets.trim() || undefined,
+				notes: editClientEditForm.notes.trim() || undefined
+			});
+			if (updated) {
+				editClientExtraAddresses = editClientExtraAddresses.map((a) =>
+					a.id === editClientEditingAddressId ? updated : a
+				);
+			}
+			editClientEditingAddressId = null;
+			toastsStore.success('Dirección actualizada');
+		} catch (e) {
+			toastsStore.error(e instanceof Error ? e.message : 'No se pudo actualizar la dirección');
+		} finally {
+			editClientSavingAddress = false;
+		}
+	}
+
+	async function clearEditClientMainAddress() {
+		if (editClientExtraAddresses.length === 1) {
+			const otra = editClientExtraAddresses[0];
+			editClientForm = {
+				...editClientForm,
+				address: otra.addressLine,
+				betweenStreets: otra.betweenStreets ?? '',
+				notes: otra.notes ?? ''
+			};
+			try {
+				await api.customerAddresses.remove(otra.id);
+				editClientExtraAddresses = [];
+				toastsStore.success('La otra dirección pasó a ser la principal');
+			} catch (e) {
+				toastsStore.error(e instanceof Error ? e.message : 'No se pudo actualizar');
+			}
+		} else {
+			editClientForm = { ...editClientForm, address: '', betweenStreets: '', notes: '' };
+			toastsStore.success('Dirección principal vaciada');
+		}
+	}
+
+	async function addEditClientExtraAddress(useAsPrincipal = false) {
+		if (!editClientCustomer || !editClientNewAddressLine.trim()) {
+			if (!editClientNewAddressLine.trim()) toastsStore.error('Escribí la dirección');
+			return;
+		}
+		editClientAddingAddress = true;
+		try {
+			const created = await api.customerAddresses.create({
+				customerId: editClientCustomer.id,
+				addressLine: editClientNewAddressLine.trim(),
+				betweenStreets: editClientNewAddressBetweenStreets.trim() || undefined,
+				notes: editClientNewAddressNotes.trim() || undefined
+			});
+			editClientExtraAddresses = [...editClientExtraAddresses, created];
+			if (useAsPrincipal) {
+				editClientForm = {
+					...editClientForm,
+					address: created.addressLine,
+					betweenStreets: created.betweenStreets ?? '',
+					notes: created.notes ?? ''
+				};
+			}
+			editClientNewAddressLine = '';
+			editClientNewAddressBetweenStreets = '';
+			editClientNewAddressNotes = '';
+			toastsStore.success(useAsPrincipal ? 'Dirección agregada y establecida como principal' : 'Dirección agregada');
+		} catch (e) {
+			toastsStore.error(e instanceof Error ? e.message : 'No se pudo agregar la dirección');
+		} finally {
+			editClientAddingAddress = false;
+		}
+	}
+
+	async function removeEditClientExtraAddress(id: string) {
+		try {
+			await api.customerAddresses.remove(id);
+			editClientExtraAddresses = editClientExtraAddresses.filter((a) => a.id !== id);
+			toastsStore.success('Dirección eliminada');
+		} catch (e) {
+			toastsStore.error(e instanceof Error ? e.message : 'No se pudo eliminar la dirección');
+		}
+	}
 
 	const saveEditClientInPos = async () => {
 		if (!editClientCustomer || !activeDraft) return;
@@ -589,22 +850,25 @@
 			toastsStore.error(parsed.error.issues[0]?.message ?? 'Datos inválidos');
 			return;
 		}
+		const phoneTrimmed = parsed.data.phone.trim();
+		const existingByPhone = await api.customers.findByPhone(phoneTrimmed);
+		if (existingByPhone && existingByPhone.id !== editClientCustomer.id) {
+			toastsStore.error('Este número ya existe y no se puede guardar');
+			return;
+		}
 		editClientSaving = true;
 		try {
 			await customersStore.update(editClientCustomer.id, parsed.data);
 			toastsStore.success('Cliente actualizado');
+			// Solo actualizamos el teléfono del draft; la dirección del pedido es la que eligieron con "Usar para este pedido"
 			const updater = (draft: OrderDraft) => ({
 				...draft,
-				customerPhoneSnapshot: parsed.data.phone,
-				addressSnapshot: parsed.data.address,
-				betweenStreetsSnapshot: parsed.data.betweenStreets
+				customerPhoneSnapshot: parsed.data.phone
 			});
 			updateActiveDraft(updater);
 			if (activeDraft.orderId) {
 				await ordersStore.update(activeDraft.orderId, {
-					customerPhoneSnapshot: parsed.data.phone,
-					addressSnapshot: parsed.data.address,
-					betweenStreetsSnapshot: parsed.data.betweenStreets
+					customerPhoneSnapshot: parsed.data.phone
 				});
 			}
 			editClientModalOpen = false;
@@ -927,6 +1191,10 @@
 		}
 		try {
 			await shiftsStore.loadOpen();
+			if (!get(sessionStore).shift) {
+				toastsStore.error('Tenés que abrir un turno para crear pedidos');
+				return;
+			}
 			const payload = {
 				customerId: selectedCustomer!.id,
 				customerPhoneSnapshot: selectedCustomer!.phone,
@@ -942,6 +1210,7 @@
 				createdByUserId: $sessionStore.user?.id,
 				cashierNameSnapshot: $sessionStore.user?.name,
 				shiftId: $sessionStore.shift?.id,
+				shiftTurnNumber: $sessionStore.shift?.turnNumber,
 				items: activeDraft.cart
 			};
 			let orderToPrint: Order | null = null;
@@ -951,7 +1220,7 @@
 				orderToPrint = await api.orders.get(activeDraft.orderId);
 			} else {
 				const created = await ordersStore.create(payload);
-				toastsStore.success(`Pedido #${created.orderNumber} creado`);
+				toastsStore.success(`Pedido #${formatOrderDisplay(created)} creado`);
 				orderToPrint = created;
 			}
 			if (orderToPrint) {
@@ -1108,20 +1377,26 @@
 							betweenStreetsSnapshot: customer.betweenStreets
 						};
 						try {
-							const created = await ordersStore.create({
-								customerId: customer.id,
-								customerPhoneSnapshot: customer.phone,
-								addressSnapshot: customer.address,
-								betweenStreetsSnapshot: customer.betweenStreets,
-								status: 'BORRADOR',
-								paymentMethod: paymentMethods[0]?.name ?? 'Efectivo',
-								total: 0,
-								items: [],
-								createdByUserId: $sessionStore.user?.id,
-								cashierNameSnapshot: $sessionStore.user?.name,
-								shiftId: $sessionStore.shift?.id
-							});
-							(withClient as OrderDraft).orderId = created.id;
+							if (get(sessionStore).shift) {
+								const created = await ordersStore.create({
+									customerId: customer.id,
+									customerPhoneSnapshot: customer.phone,
+									addressSnapshot: customer.address,
+									betweenStreetsSnapshot: customer.betweenStreets,
+									status: 'BORRADOR',
+									paymentMethod: paymentMethods[0]?.name ?? 'Efectivo',
+									total: 0,
+									items: [],
+									createdByUserId: $sessionStore.user?.id,
+									cashierNameSnapshot: $sessionStore.user?.name,
+									shiftId: $sessionStore.shift?.id,
+									shiftTurnNumber: $sessionStore.shift?.turnNumber
+								});
+								(withClient as OrderDraft).orderId = created.id;
+								(withClient as OrderDraft).orderDisplayNumber = formatOrderDisplay(created);
+							} else {
+								toastsStore.error('Tenés que abrir un turno para crear pedidos');
+							}
 						} catch {
 							// sigue con el borrador local sin orderId
 						}
@@ -1262,7 +1537,7 @@
 								<div class="min-w-0 flex-1 pr-6">
 									<p class="truncate text-sm font-semibold {isActive ? 'text-white dark:text-slate-900' : ''}">{draftCustomer(draft)?.phone ?? draft.customerPhoneSnapshot ?? '—'}</p>
 									<p class="mt-0.5 line-clamp-2 text-xs leading-tight {isActive ? 'text-slate-300 dark:text-slate-600' : 'text-slate-500 dark:text-slate-400'}">
-										{draftCustomer(draft)?.address ?? draft.addressSnapshot ?? 'Sin dirección'}
+										{draft.addressSnapshot ?? draftCustomer(draft)?.address ?? 'Sin dirección'}
 									</p>
 								</div>
 								<div class="mt-0.5 flex w-full items-center justify-end">
@@ -1514,18 +1789,23 @@
 						role="menuitem"
 						onclick={() => openEditClientInPos(selectedCustomer)}
 					>
-						Editar cliente
+						Editar cliente o dirección
 					</button>
 				</div>
 			{/if}
 			<div class="rounded-lg border border-slate-200 p-3 pr-12 text-sm dark:border-slate-700">
 				<p><span class="font-medium">Tel:</span> {selectedCustomer.phone}</p>
-				<p><span class="font-medium">Dirección:</span> {selectedCustomer.address}</p>
-				<p><span class="font-medium">Entre calles:</span> {selectedCustomer.betweenStreets ?? '-'}</p>
+				<p><span class="font-medium">Dirección:</span> {activeDraft?.addressSnapshot ?? selectedCustomer.address}</p>
+				<p><span class="font-medium">Entre calles:</span> {(activeDraft?.betweenStreetsSnapshot ?? selectedCustomer.betweenStreets) || '-'}</p>
 				<p><span class="font-medium">Observación:</span> {selectedCustomer.notes ?? '-'}</p>
 			</div>
 
-			<h2 class="mb-3 mt-4 text-base font-semibold">Resumen del pedido</h2>
+			<div class="mb-3 mt-4 flex items-center justify-between gap-2">
+				<h2 class="text-base font-semibold">Resumen del pedido</h2>
+				{#if activeDraft?.orderDisplayNumber}
+					<span class="text-sm font-medium text-slate-600 dark:text-slate-400">#{activeDraft.orderDisplayNumber}</span>
+				{/if}
+			</div>
 			<div class="max-h-72 space-y-2 overflow-auto">
 				{#if !activeDraft || activeDraft.cart.length === 0}
 					<p class="text-sm text-slate-500 dark:text-slate-400">Sin items</p>
@@ -1604,14 +1884,22 @@
 						<span class="text-sm font-medium">Monto recibido</span>
 						<input
 							class="input"
-							type="number"
-							min="0"
-							step="0.01"
+							type="text"
+							inputmode="decimal"
 							placeholder="0"
-							value={activeDraft.cashReceived || ''}
+							value={activeDraft.cashReceived === 0 || activeDraft.cashReceived == null ? '' : String(activeDraft.cashReceived)}
 							oninput={(e) => {
-								const value = Number((e.currentTarget as HTMLInputElement).value);
-								updateActiveDraft((draft) => ({ ...draft, cashReceived: value || 0 }));
+								let raw = (e.currentTarget as HTMLInputElement).value.replace(/[^\d.]/g, '');
+								const parts = raw.split('.');
+								if (parts.length > 2) raw = parts[0] + '.' + parts.slice(1).join('');
+								else if (parts.length === 2 && parts[1].length > 2) raw = parts[0] + '.' + parts[1].slice(0, 2);
+								const num = raw === '' || raw === '.' ? 0 : parseFloat(raw);
+								updateActiveDraft((draft) => ({ ...draft, cashReceived: isNaN(num) ? 0 : num }));
+							}}
+							onkeydown={(e) => {
+								if (['Backspace', 'Delete', 'Tab', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+								if ((e.ctrlKey || e.metaKey) && ['a', 'c', 'v', 'x'].includes(e.key.toLowerCase())) return;
+								if (!/[\d.]/.test(e.key)) e.preventDefault();
 							}}
 						/>
 					</label>
@@ -1790,11 +2078,98 @@
 			aria-describedby="client-modal-desc"
 			aria-labelledby="client-modal-title"
 		>
-			<h2 id="client-modal-title" class="mb-4 text-lg font-semibold">Buscar o agregar cliente</h2>
+			<h2 id="client-modal-title" class="mb-4 text-lg font-semibold">
+				{#if clientModalStep === 'chooseAddress'}Elegir dirección para el pedido{:else}Buscar o agregar cliente{/if}
+			</h2>
 			{#if clientModalSaving}
 				<div id="client-modal-desc" class="flex flex-col items-center justify-center gap-3 py-8">
 					<div class="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-blue-600 dark:border-neutral-600 dark:border-t-blue-400" aria-hidden="true"></div>
 					<p class="text-sm text-slate-600 dark:text-slate-400">Agregando pedido…</p>
+				</div>
+			{:else if clientModalStep === 'chooseAddress' && clientModalChosenCustomer}
+				<div id="client-modal-desc" class="space-y-3">
+					<p class="text-sm text-slate-600 dark:text-slate-400">Cliente: <strong>{clientModalChosenCustomer.phone}</strong></p>
+					<p class="text-xs font-medium text-slate-700 dark:text-neutral-300">¿Con qué dirección creamos el pedido?</p>
+					<div class="space-y-2">
+						<button
+							type="button"
+							class="w-full rounded-lg border border-slate-200 p-2.5 text-left text-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/50"
+							onclick={() => selectClientWithAddress(clientModalChosenCustomer!, clientModalChosenCustomer!.address, clientModalChosenCustomer!.betweenStreets)}
+						>
+							<span class="font-medium text-slate-900 dark:text-white">Dirección principal</span>
+							<p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{clientModalChosenCustomer.address}</p>
+							{#if clientModalChosenCustomer.betweenStreets?.trim()}
+								<p class="text-xs text-slate-500 dark:text-slate-400">Entre: {clientModalChosenCustomer.betweenStreets}</p>
+							{/if}
+						</button>
+						{#if clientModalExtraAddressesLoading}
+							<p class="px-2 py-1 text-xs text-slate-500">Cargando otras direcciones…</p>
+						{:else}
+							{#each clientModalExtraAddresses as addr}
+								<button
+									type="button"
+									class="w-full rounded-lg border border-slate-200 p-2.5 text-left text-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800/50"
+									onclick={() => selectClientWithAddress(clientModalChosenCustomer!, addr.addressLine, addr.betweenStreets)}
+								>
+									<p class="text-xs font-medium text-slate-900 dark:text-white">{addr.addressLine}</p>
+									{#if addr.betweenStreets}
+										<p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">Entre: {addr.betweenStreets}</p>
+									{/if}
+									{#if addr.notes}
+										<p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">Obs.: {addr.notes}</p>
+									{/if}
+								</button>
+							{/each}
+						{/if}
+						{#if clientModalShowAddAddressForm}
+							<div class="rounded-lg border border-dashed border-slate-300 p-2 dark:border-slate-600">
+								<p class="mb-2 text-xs font-medium text-slate-600 dark:text-slate-400">Nueva dirección</p>
+								<input
+									class="input mb-2 w-full"
+									placeholder="Dirección"
+									bind:value={clientModalNewAddressForm.addressLine}
+								/>
+								<input
+									class="input mb-2 w-full"
+									placeholder="Entre calles (opcional)"
+									bind:value={clientModalNewAddressForm.betweenStreets}
+								/>
+								<textarea
+									class="input mb-2 min-h-14 w-full"
+									placeholder="Observación (opcional)"
+									bind:value={clientModalNewAddressForm.notes}
+								></textarea>
+								<div class="flex gap-2">
+									<button
+										type="button"
+										class="btn-secondary flex-1 !py-1.5 text-sm"
+										onclick={() => (clientModalShowAddAddressForm = false)}
+									>
+										Cancelar
+									</button>
+									<button
+										type="button"
+										class="btn-primary flex-1 !py-1.5 text-sm"
+										onclick={submitClientModalNewAddress}
+										disabled={clientModalAddingAddress}
+									>
+										{clientModalAddingAddress ? 'Guardando…' : 'Agregar y usar esta dirección'}
+									</button>
+								</div>
+							</div>
+						{:else}
+							<button
+								type="button"
+								class="w-full rounded-lg border border-dashed border-slate-300 py-2 text-center text-sm text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-400 dark:hover:bg-slate-800/50"
+								onclick={() => (clientModalShowAddAddressForm = true)}
+							>
+								+ Agregar otra dirección
+							</button>
+						{/if}
+					</div>
+					<button type="button" class="btn-secondary w-full" onclick={closeChooseAddress}>
+						Volver a la lista
+					</button>
 				</div>
 			{:else if addClientMode}
 				<div id="client-modal-desc" class="space-y-3">
@@ -1869,6 +2244,9 @@
 						bind:value={clientSearch}
 						aria-label="Buscar cliente"
 					/>
+					<p class="text-xs text-slate-500 dark:text-slate-400">
+						Seleccioná el cliente; después podés elegir otra dirección si no querés usar la principal.
+					</p>
 					<div class="max-h-64 space-y-1 overflow-y-auto rounded-lg border border-slate-200 dark:border-neutral-700">
 						{#if ($customersStatus === 'loading' || $customersStatus === 'refreshing') && $customersStore.length === 0}
 							<p class="px-3 py-4 text-center text-sm text-slate-500 dark:text-slate-400">
@@ -1937,19 +2315,19 @@
 	<Dialog.Portal>
 		<Dialog.Overlay class="fixed inset-0 z-40 bg-black/50" />
 		<Dialog.Content
-			class="fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border border-slate-200 bg-white p-4 shadow-xl dark:border-neutral-700 dark:bg-black"
+			class="fixed left-1/2 top-1/2 z-50 w-full max-w-[500px] max-h-[90vh] -translate-x-1/2 -translate-y-1/2 flex flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-xl dark:border-neutral-700 dark:bg-black"
 			aria-describedby="edit-client-modal-desc"
 			aria-labelledby="edit-client-modal-title"
 		>
-			<h2 id="edit-client-modal-title" class="mb-4 text-lg font-semibold">Editar cliente</h2>
+			<h2 id="edit-client-modal-title" class="mb-4 shrink-0 text-lg font-semibold">Editar cliente o dirección</h2>
 			{#if editClientSaving}
 				<div id="edit-client-modal-desc" class="flex flex-col items-center justify-center gap-3 py-8">
 					<div class="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-blue-600 dark:border-neutral-600 dark:border-t-blue-400" aria-hidden="true"></div>
 					<p class="text-sm text-slate-600 dark:text-slate-400">Guardando…</p>
 				</div>
 			{:else}
-				<div id="edit-client-modal-desc" class="space-y-3">
-					<label class="block">
+				<div id="edit-client-modal-desc" class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+					<label class="block shrink-0">
 						<span class="mb-1 block text-sm text-slate-600 dark:text-slate-400">Teléfono</span>
 						<input
 							class="input w-full"
@@ -1968,19 +2346,155 @@
 							}}
 						/>
 					</label>
-					<label class="block">
-						<span class="mb-1 block text-sm text-slate-600 dark:text-slate-400">Dirección</span>
-						<input class="input w-full" type="text" bind:value={editClientForm.address} placeholder="Calle y número" />
-					</label>
-					<label class="block">
-						<span class="mb-1 block text-sm text-slate-600 dark:text-slate-400">Entre calles (opcional)</span>
-						<input class="input w-full" type="text" bind:value={editClientForm.betweenStreets} placeholder="Ej: Av. X y Calle Y" />
-					</label>
-					<label class="block">
-						<span class="mb-1 block text-sm text-slate-600 dark:text-slate-400">Observación (opcional)</span>
-						<input class="input w-full" type="text" bind:value={editClientForm.notes} placeholder="Referencias" />
-					</label>
-					<div class="flex gap-2 pt-2">
+					<div class="shrink-0 border-t border-slate-200 pt-3 dark:border-slate-700">
+						<p class="mb-2 text-sm font-medium text-slate-700 dark:text-neutral-300">Direcciones</p>
+						<p class="mb-2 text-xs text-slate-500 dark:text-slate-400">Elegí la dirección para este pedido. Podés editar o eliminar cualquiera.</p>
+						<ul class="space-y-2">
+							{#each editClientAllAddresses as item (item.id)}
+								<li class="rounded-lg border border-slate-200 p-2 dark:border-slate-700 {editClientAddressUsedForOrder(item) ? 'ring-2 ring-blue-500 dark:ring-blue-400' : ''}">
+									{#if editClientEditingAddressId === item.id}
+										<div class="space-y-2">
+											<input
+												class="input w-full"
+												placeholder="Calle y número"
+												bind:value={editClientEditForm.addressLine}
+											/>
+											<input
+												class="input w-full"
+												placeholder="Entre calles (opcional)"
+												bind:value={editClientEditForm.betweenStreets}
+											/>
+											<input
+												class="input w-full"
+												placeholder="Observación (opcional)"
+												bind:value={editClientEditForm.notes}
+											/>
+											<div class="flex gap-2">
+												<button
+													type="button"
+													class="btn-primary !py-1.5 text-sm"
+													onclick={() => saveEditClientAddress()}
+													disabled={editClientSavingAddress || !editClientEditForm.addressLine.trim()}
+												>
+													{editClientSavingAddress ? 'Guardando…' : 'Guardar'}
+												</button>
+												<button
+													type="button"
+													class="btn-secondary !py-1.5 text-sm"
+													onclick={cancelEditClientAddress}
+													disabled={editClientSavingAddress}
+												>
+													Cancelar
+												</button>
+											</div>
+										</div>
+									{:else}
+										<div class="flex items-start justify-between gap-2">
+											<div class="min-w-0 flex-1">
+												{#if item.isMain}
+													<span class="mb-1 inline-block rounded bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">Principal</span>
+												{/if}
+												<p class="text-sm font-medium text-slate-900 dark:text-white">{item.addressLine || '—'}</p>
+												{#if item.betweenStreets}
+													<p class="text-xs text-slate-500 dark:text-slate-400">Entre: {item.betweenStreets}</p>
+												{/if}
+												{#if item.notes}
+													<p class="text-xs text-slate-500 dark:text-slate-400">Obs.: {item.notes}</p>
+												{/if}
+												{#if editClientAddressUsedForOrder(item)}
+													<p class="mt-1 text-xs font-medium text-blue-600 dark:text-blue-400">En uso en este pedido</p>
+												{/if}
+											</div>
+											<div class="flex shrink-0 flex-wrap gap-1">
+												{#if !editClientAddressUsedForOrder(item)}
+													<button
+														type="button"
+														class="rounded px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-950/30"
+														onclick={() => useEditClientAddressForOrder(item)}
+														title="Usar para este pedido"
+													>
+														Usar para este pedido
+													</button>
+												{/if}
+												<button
+													type="button"
+													class="rounded px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+													onclick={() => startEditClientAddress(item)}
+													title="Editar dirección"
+												>
+													Editar
+												</button>
+												{#if !editClientAddressUsedForOrder(item)}
+													{#if item.isMain}
+														<button
+															type="button"
+															class="rounded px-2 py-1 text-xs font-medium text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/30"
+															onclick={() => clearEditClientMainAddress()}
+															title="Vaciar dirección principal"
+														>
+															Eliminar
+														</button>
+													{:else}
+														<button
+															type="button"
+															class="rounded px-2 py-1 text-xs font-medium text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/30"
+															onclick={() => removeEditClientExtraAddress(item.id)}
+															title="Eliminar dirección"
+														>
+															Eliminar
+														</button>
+													{/if}
+												{:else}
+													<span class="rounded px-2 py-1 text-xs text-slate-500 dark:text-slate-400" title="No se puede eliminar porque está en uso en este pedido">En uso</span>
+												{/if}
+											</div>
+										</div>
+									{/if}
+								</li>
+							{/each}
+						</ul>
+						<div class="mt-2 rounded-lg border border-dashed border-slate-300 p-2 dark:border-slate-600">
+							<p class="mb-2 text-xs text-slate-500 dark:text-slate-400">Agregar dirección</p>
+							<input
+								class="input mb-2 w-full"
+								placeholder="Dirección"
+								bind:value={editClientNewAddressLine}
+								onkeydown={(e) => e.key === 'Enter' && addEditClientExtraAddress(false)}
+							/>
+							<input
+								class="input mb-2 w-full"
+								placeholder="Entre calles (opcional)"
+								bind:value={editClientNewAddressBetweenStreets}
+								onkeydown={(e) => e.key === 'Enter' && addEditClientExtraAddress(false)}
+							/>
+							<input
+								class="input mb-2 w-full"
+								placeholder="Observación (opcional)"
+								bind:value={editClientNewAddressNotes}
+								onkeydown={(e) => e.key === 'Enter' && addEditClientExtraAddress(false)}
+							/>
+							<div class="flex gap-2">
+								<button
+									type="button"
+									class="btn-primary flex-1 !py-1.5 text-sm"
+									onclick={() => addEditClientExtraAddress(false)}
+									disabled={editClientAddingAddress || !editClientNewAddressLine.trim()}
+								>
+									{editClientAddingAddress ? 'Agregando…' : 'Agregar dirección'}
+								</button>
+								<button
+									type="button"
+									class="btn-secondary flex-1 !py-1.5 text-sm"
+									onclick={() => addEditClientExtraAddress(true)}
+									disabled={editClientAddingAddress || !editClientNewAddressLine.trim()}
+									title="Agregar y establecer como dirección principal del cliente"
+								>
+									Agregar y como principal
+								</button>
+							</div>
+						</div>
+					</div>
+					<div class="flex gap-2 pt-2 shrink-0">
 						<Dialog.Close class="btn-secondary flex-1" disabled={editClientSaving}>Cancelar</Dialog.Close>
 						<button
 							type="button"

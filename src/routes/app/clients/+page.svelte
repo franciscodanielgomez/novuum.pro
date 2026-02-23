@@ -4,6 +4,7 @@
 	import { DataTable } from '$lib/components/table';
 	import type { DataTableColumn } from '$lib/components/table';
 	import { api } from '$lib/api';
+	import type { CustomerAddress } from '$lib/repo/customerAddressesRepo';
 	import { customerSchema, customersBulkSchema } from '$lib/schemas';
 	import { customersStore, customersStatus, customersLoadError } from '$lib/stores/customers';
 	import { uiStore } from '$lib/stores/uiStore';
@@ -24,6 +25,16 @@
 	let editing = $state<Customer | null>(null);
 	let form = $state({ phone: '', address: '', betweenStreets: '', notes: '' });
 	let saving = $state(false);
+	let deleteConfirmOpen = $state(false);
+	let deleting = $state(false);
+	let extraAddresses = $state<CustomerAddress[]>([]);
+	let newAddressLine = $state('');
+	let newAddressBetweenStreets = $state('');
+	let newAddressNotes = $state('');
+	let addingAddress = $state(false);
+	let editingAddressId = $state<string | null>(null);
+	let editAddressForm = $state({ addressLine: '', betweenStreets: '', notes: '' });
+	let savingEditAddress = $state(false);
 
 	// Modal "Buscar o agregar cliente" (como en el POS)
 	let newClientModalOpen = $state(false);
@@ -51,13 +62,18 @@
 		($customersStatus === 'loading' || $customersStatus === 'refreshing') && customersList.length === 0
 	);
 
-	// Búsqueda por teléfono: misma API que el POS (api.customers.search).
+	// Búsqueda: criterio (teléfono, dirección principal, otras direcciones) y texto.
+	type SearchBy = 'phone' | 'address' | 'other_addresses';
+	let clientSearchBy = $state<SearchBy>('phone');
 	let clientSearchQuery = $state('');
 	let clientSearchResults = $state<Customer[]>([]);
 	let clientSearchLoading = $state(false);
 	let clientSearchError = $state(false);
+	let clientSearchOtherIds = $state<string[]>([]);
+	let clientSearchOtherLoading = $state(false);
 
 	const searchDigits = $derived(String(clientSearchQuery ?? '').replace(/\D/g, ''));
+	const searchTrimmed = $derived(String(clientSearchQuery ?? '').trim());
 
 	// Return-to-app handshake: no refrescar datos mientras el modal o el drawer con cambios estén abiertos.
 	$effect(() => {
@@ -91,10 +107,30 @@
 		});
 	});
 
-	// Debounce y llamada a API (solo en el cliente; misma API que el POS).
+	// Filtro local por dirección principal (address, betweenStreets, notes).
+	const filteredByMainAddress = $derived.by(() => {
+		const list = Array.isArray($customersStore) ? $customersStore : [];
+		const q = searchTrimmed.toLowerCase();
+		if (!q) return list;
+		return list.filter((c) => {
+			const addr = String(c.address ?? '').toLowerCase();
+			const between = String(c.betweenStreets ?? '').toLowerCase();
+			const notes = String(c.notes ?? '').toLowerCase();
+			return addr.includes(q) || between.includes(q) || notes.includes(q);
+		});
+	});
+
+	// Debounce y llamada a API por teléfono (solo cuando criterio es Teléfono).
 	let searchTimeoutId: ReturnType<typeof setTimeout> | null = null;
 	$effect(() => {
-		if (!browser) return;
+		if (!browser || clientSearchBy !== 'phone') {
+			if (searchTimeoutId) clearTimeout(searchTimeoutId);
+			searchTimeoutId = null;
+			clientSearchResults = [];
+			clientSearchLoading = false;
+			clientSearchError = false;
+			return;
+		}
 		const q = String(clientSearchQuery ?? '').trim();
 		const digits = q.replace(/\D/g, '');
 		if (digits.length < 4) {
@@ -130,13 +166,64 @@
 		};
 	});
 
-	const displayList = $derived(
-		searchDigits.length < 4
-			? customersList
-			: filteredFromStore.length > 0
-				? filteredFromStore
-				: clientSearchResults
-	);
+	// Búsqueda en otras direcciones (API por texto).
+	let searchOtherTimeoutId: ReturnType<typeof setTimeout> | null = null;
+	$effect(() => {
+		if (!browser || clientSearchBy !== 'other_addresses') {
+			if (searchOtherTimeoutId) clearTimeout(searchOtherTimeoutId);
+			searchOtherTimeoutId = null;
+			clientSearchOtherIds = [];
+			clientSearchOtherLoading = false;
+			return;
+		}
+		const q = searchTrimmed;
+		if (q.length < 2) {
+			if (searchOtherTimeoutId) clearTimeout(searchOtherTimeoutId);
+			searchOtherTimeoutId = null;
+			clientSearchOtherIds = [];
+			clientSearchOtherLoading = false;
+			return;
+		}
+		if (searchOtherTimeoutId) clearTimeout(searchOtherTimeoutId);
+		searchOtherTimeoutId = setTimeout(() => {
+			searchOtherTimeoutId = null;
+			clientSearchOtherLoading = true;
+			api.customerAddresses
+				.searchCustomerIdsByText(q)
+				.then((ids) => {
+					clientSearchOtherIds = ids;
+				})
+				.catch(() => {
+					clientSearchOtherIds = [];
+				})
+				.finally(() => {
+					clientSearchOtherLoading = false;
+				});
+		}, 350);
+		return () => {
+			if (searchOtherTimeoutId) clearTimeout(searchOtherTimeoutId);
+		};
+	});
+
+	const displayList = $derived.by(() => {
+		const list = Array.isArray($customersStore) ? $customersStore : [];
+		if (clientSearchBy === 'phone') {
+			return searchDigits.length < 4
+				? list
+				: filteredFromStore.length > 0
+					? filteredFromStore
+					: clientSearchResults;
+		}
+		if (clientSearchBy === 'address') {
+			return filteredByMainAddress;
+		}
+		if (clientSearchBy === 'other_addresses') {
+			if (searchTrimmed.length < 2) return list;
+			const idSet = new Set(clientSearchOtherIds);
+			return list.filter((c) => idSet.has(c.id));
+		}
+		return list;
+	});
 
 	// Modal: lista filtrada en memoria y búsqueda por API
 	const modalFilteredClients = $derived.by(() => {
@@ -302,11 +389,14 @@
 			betweenStreets: customer.betweenStreets ?? '',
 			notes: customer.notes ?? ''
 		};
+		extraAddresses = [];
+		newAddressLine = '';
+		newAddressBetweenStreets = '';
+		newAddressNotes = '';
+		void api.customerAddresses.listByCustomerId(customer.id).then((list) => {
+			extraAddresses = list;
+		});
 		drawerOpen = true;
-	};
-
-	const createOrderWith = (customer: Customer) => {
-		void goto(`/app/create_order?customerId=${encodeURIComponent(customer.id)}`);
 	};
 
 	const save = async () => {
@@ -336,6 +426,110 @@
 			toastsStore.error(msg);
 		} finally {
 			saving = false;
+		}
+	};
+
+	const openDeleteConfirm = () => {
+		deleteConfirmOpen = true;
+	};
+
+	const cancelDelete = () => {
+		deleteConfirmOpen = false;
+	};
+
+	async function addExtraAddress() {
+		if (!editing || !newAddressLine.trim()) {
+			if (!newAddressLine.trim()) toastsStore.error('Escribí la dirección');
+			return;
+		}
+		addingAddress = true;
+		try {
+			const created = await api.customerAddresses.create({
+				customerId: editing.id,
+				addressLine: newAddressLine.trim(),
+				betweenStreets: newAddressBetweenStreets.trim() || undefined,
+				notes: newAddressNotes.trim() || undefined
+			});
+			extraAddresses = [...extraAddresses, created];
+			newAddressLine = '';
+			newAddressBetweenStreets = '';
+			newAddressNotes = '';
+			toastsStore.success('Dirección agregada');
+		} catch (e) {
+			toastsStore.error(e instanceof Error ? e.message : 'No se pudo agregar la dirección');
+		} finally {
+			addingAddress = false;
+		}
+	}
+
+	function startEditAddress(addr: CustomerAddress) {
+		editingAddressId = addr.id;
+		editAddressForm = {
+			addressLine: addr.addressLine,
+			betweenStreets: addr.betweenStreets ?? '',
+			notes: addr.notes ?? ''
+		};
+	}
+
+	function cancelEditAddress() {
+		editingAddressId = null;
+	}
+
+	async function saveEditAddress() {
+		if (!editingAddressId) return;
+		if (!editAddressForm.addressLine.trim()) {
+			toastsStore.error('La dirección no puede estar vacía');
+			return;
+		}
+		savingEditAddress = true;
+		try {
+			const updated = await api.customerAddresses.update(editingAddressId, {
+				addressLine: editAddressForm.addressLine.trim(),
+				betweenStreets: editAddressForm.betweenStreets.trim() || undefined,
+				notes: editAddressForm.notes.trim() || undefined
+			});
+			if (updated) {
+				extraAddresses = extraAddresses.map((a) => (a.id === editingAddressId ? updated : a));
+			}
+			editingAddressId = null;
+			toastsStore.success('Dirección actualizada');
+		} catch (e) {
+			toastsStore.error(e instanceof Error ? e.message : 'No se pudo actualizar la dirección');
+		} finally {
+			savingEditAddress = false;
+		}
+	}
+
+	async function removeExtraAddress(id: string) {
+		if (editingAddressId === id) editingAddressId = null;
+		try {
+			await api.customerAddresses.remove(id);
+			extraAddresses = extraAddresses.filter((a) => a.id !== id);
+			toastsStore.success('Dirección eliminada');
+		} catch (e) {
+			toastsStore.error(e instanceof Error ? e.message : 'No se pudo eliminar la dirección');
+		}
+	}
+
+	const confirmDelete = async () => {
+		if (!editing) return;
+		deleting = true;
+		try {
+			await customersStore.remove(editing.id);
+			toastsStore.success('Cliente eliminado');
+			deleteConfirmOpen = false;
+			drawerOpen = false;
+			editing = null;
+		} catch (e) {
+			const err = e as Error & { message?: string };
+			const msg = err?.message?.trim() ?? '';
+			if (msg.includes('foreign key') && msg.includes('orders')) {
+				toastsStore.error('No se puede eliminar este cliente porque tiene pedidos asociados.');
+			} else {
+				toastsStore.error(msg || 'No se pudo eliminar el cliente');
+			}
+		} finally {
+			deleting = false;
 		}
 	};
 
@@ -405,21 +599,32 @@
 			columns={columns}
 			rowId={(c) => c.id}
 			actions={[
-				{ label: 'Crear pedido', onClick: createOrderWith, variant: 'default', icon: 'plus' },
 				{ label: 'Editar', onClick: openEdit, variant: 'secondary', icon: 'edit' }
 			]}
-			emptyMessage={clientSearchLoading ? 'Buscando…' : clientSearchError ? 'Error de conexión al buscar. Revisá la red y reintentá.' : searchDigits.length >= 4 ? 'Sin resultados para este teléfono.' : 'No hay clientes. Creá uno con «Nuevo cliente».'}
-			loading={loading}
+			emptyMessage={clientSearchLoading || clientSearchOtherLoading ? 'Buscando…' : clientSearchError ? 'Error de conexión al buscar. Revisá la red y reintentá.' : clientSearchBy === 'phone' && searchDigits.length >= 4 ? 'Sin resultados para este teléfono.' : clientSearchBy === 'address' && searchTrimmed ? 'Sin resultados en dirección principal.' : clientSearchBy === 'other_addresses' && searchTrimmed.length >= 2 ? 'Sin resultados en otras direcciones.' : 'No hay clientes. Creá uno con «Nuevo cliente».'}
+			loading={loading || (clientSearchBy === 'phone' && clientSearchLoading) || (clientSearchBy === 'other_addresses' && clientSearchOtherLoading)}
 			persistState={true}
+			resetPageWhen={`${clientSearchBy}:${clientSearchQuery}`}
 		>
 			{#snippet toolbarLeft()}
-				<input
-					class="input min-w-[14rem] max-w-xs w-full"
-					type="search"
-					placeholder="Buscar por teléfono (ej. 1128939337)"
-					bind:value={clientSearchQuery}
-					aria-label="Buscar cliente"
-				/>
+				<div class="flex flex-nowrap items-center gap-2">
+					<input
+						class="input w-[22rem] min-w-[16rem] max-w-[26rem]"
+						type="search"
+						placeholder={clientSearchBy === 'phone' ? 'Buscar por teléfono (ej. 1128939337)' : clientSearchBy === 'address' ? 'Buscar por dirección principal...' : 'Buscar en otras direcciones...'}
+						bind:value={clientSearchQuery}
+						aria-label="Buscar cliente"
+					/>
+					<select
+						class="input w-[14rem] shrink-0"
+						aria-label="Criterio de búsqueda"
+						bind:value={clientSearchBy}
+					>
+						<option value="phone">Teléfono</option>
+						<option value="address">Dirección principal</option>
+						<option value="other_addresses">Otras direcciones</option>
+					</select>
+				</div>
 			{/snippet}
 			{#snippet toolbarActions()}
 				<button type="button" class="btn-primary" onclick={openNew}>Nuevo cliente</button>
@@ -573,8 +778,8 @@
 	</Dialog.Portal>
 </Dialog.Root>
 
-<SideDrawer bind:open={drawerOpen} title={editing ? 'Editar cliente' : 'Nuevo cliente'}>
-	<div class="space-y-3">
+<SideDrawer bind:open={drawerOpen} title={editing ? 'Editar cliente' : 'Nuevo cliente'} maxWidth="500px">
+	<div class="space-y-4">
 		<label class="block space-y-1">
 			<span class="text-sm font-medium text-slate-700 dark:text-neutral-300">Teléfono</span>
 			<input
@@ -590,20 +795,190 @@
 				}}
 			/>
 		</label>
-		<label class="block space-y-1">
-			<span class="text-sm font-medium text-slate-700 dark:text-neutral-300">Dirección</span>
-			<input class="input" bind:value={form.address} />
-		</label>
-		<label class="block space-y-1">
-			<span class="text-sm font-medium text-slate-700 dark:text-neutral-300">Entre calles</span>
-			<input class="input" bind:value={form.betweenStreets} />
-		</label>
-		<label class="block space-y-1">
-			<span class="text-sm font-medium text-slate-700 dark:text-neutral-300">Observación</span>
-			<textarea class="input min-h-24" bind:value={form.notes}></textarea>
-		</label>
-		<button class="btn-primary" onclick={save} disabled={saving}>
-			{saving ? 'Guardando…' : 'Guardar'}
-		</button>
+
+		<div class="border-t border-slate-200 pt-3 dark:border-slate-700">
+			<p class="mb-2 text-sm font-medium text-slate-700 dark:text-neutral-300">Dirección principal</p>
+			<div class="space-y-2">
+				<label class="block space-y-1">
+					<span class="text-xs text-slate-500 dark:text-slate-400">Dirección</span>
+					<input class="input" bind:value={form.address} placeholder="Calle y número" />
+				</label>
+				<label class="block space-y-1">
+					<span class="text-xs text-slate-500 dark:text-slate-400">Entre calles</span>
+					<input class="input" bind:value={form.betweenStreets} placeholder="Ej. ESQ BACACAY" />
+				</label>
+				<label class="block space-y-1">
+					<span class="text-xs text-slate-500 dark:text-slate-400">Observación</span>
+					<textarea class="input min-h-20" bind:value={form.notes} placeholder="Observación del cliente o de la dirección"></textarea>
+				</label>
+			</div>
+		</div>
+
+		{#if editing && extraAddresses.length >= 0}
+			<div class="border-t border-slate-200 pt-3 dark:border-slate-700">
+				<p class="mb-2 text-sm font-medium text-slate-700 dark:text-neutral-300">Otras direcciones</p>
+				{#if extraAddresses.length > 0}
+					<ul class="space-y-2">
+						{#each extraAddresses as addr}
+							<li class="rounded-lg border border-slate-200 p-2 dark:border-slate-700">
+								{#if editingAddressId === addr.id}
+									<div class="space-y-2">
+										<input
+											class="input"
+											placeholder="Dirección"
+											bind:value={editAddressForm.addressLine}
+										/>
+										<input
+											class="input"
+											placeholder="Entre calles (opcional)"
+											bind:value={editAddressForm.betweenStreets}
+										/>
+										<textarea
+											class="input min-h-16"
+											placeholder="Observación (opcional)"
+											bind:value={editAddressForm.notes}
+										></textarea>
+										<div class="flex gap-2">
+											<button
+												type="button"
+												class="btn-primary !py-1.5 text-sm"
+												onclick={saveEditAddress}
+												disabled={savingEditAddress}
+											>
+												{savingEditAddress ? 'Guardando…' : 'Guardar'}
+											</button>
+											<button
+												type="button"
+												class="btn-secondary !py-1.5 text-sm"
+												onclick={cancelEditAddress}
+												disabled={savingEditAddress}
+											>
+												Cancelar
+											</button>
+										</div>
+									</div>
+								{:else}
+									<div class="flex items-start justify-between gap-2">
+										<div class="min-w-0 flex-1">
+											<p class="text-sm font-medium text-slate-900 dark:text-white">{addr.addressLine}</p>
+											{#if addr.betweenStreets}
+												<p class="text-xs text-slate-500 dark:text-slate-400">Entre: {addr.betweenStreets}</p>
+											{/if}
+											{#if addr.notes}
+												<p class="text-xs text-slate-500 dark:text-slate-400">Obs.: {addr.notes}</p>
+											{/if}
+										</div>
+										<div class="flex shrink-0 gap-1">
+											<button
+												type="button"
+												class="rounded px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+												onclick={() => startEditAddress(addr)}
+												title="Editar dirección"
+											>
+												Editar
+											</button>
+											<button
+												type="button"
+												class="rounded px-2 py-1 text-xs font-medium text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/30"
+												onclick={() => removeExtraAddress(addr.id)}
+												title="Eliminar dirección"
+											>
+												Eliminar
+											</button>
+										</div>
+									</div>
+								{/if}
+							</li>
+						{/each}
+					</ul>
+				{/if}
+				<div class="mt-2 rounded-lg border border-dashed border-slate-300 p-2 dark:border-slate-600">
+					<p class="mb-2 text-xs text-slate-500 dark:text-slate-400">Agregar dirección</p>
+					<input
+						class="input mb-2"
+						placeholder="Dirección"
+						bind:value={newAddressLine}
+						onkeydown={(e) => e.key === 'Enter' && addExtraAddress()}
+					/>
+					<input
+						class="input mb-2"
+						placeholder="Entre calles (opcional)"
+						bind:value={newAddressBetweenStreets}
+						onkeydown={(e) => e.key === 'Enter' && addExtraAddress()}
+					/>
+					<textarea
+						class="input mb-2 min-h-16"
+						placeholder="Observación de la dirección (opcional)"
+						bind:value={newAddressNotes}
+						onkeydown={(e) => e.key === 'Enter' && !e.shiftKey && addExtraAddress()}
+					></textarea>
+					<button
+						type="button"
+						class="btn-secondary !py-1.5 text-sm"
+						onclick={addExtraAddress}
+						disabled={addingAddress}
+					>
+						{addingAddress ? 'Agregando…' : 'Agregar dirección'}
+					</button>
+				</div>
+			</div>
+		{/if}
+
+		<div class="flex flex-wrap items-center gap-2">
+			<button class="btn-primary" onclick={save} disabled={saving}>
+				{saving ? 'Guardando…' : 'Guardar'}
+			</button>
+			{#if editing}
+				<button
+					type="button"
+					class="rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-sm font-medium text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:bg-neutral-800 dark:text-rose-400 dark:hover:bg-rose-950/30"
+					onclick={openDeleteConfirm}
+					disabled={saving}
+				>
+					Eliminar
+				</button>
+			{/if}
+		</div>
 	</div>
 </SideDrawer>
+
+{#if deleteConfirmOpen}
+	<div
+		class="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+		role="dialog"
+		aria-modal="true"
+		aria-labelledby="modal-eliminar-cliente-title"
+		onclick={(e) => e.target === e.currentTarget && cancelDelete()}
+		onkeydown={(e) => e.key === 'Escape' && cancelDelete()}
+	>
+		<div
+			class="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-neutral-700 dark:bg-neutral-900"
+			onclick={(e) => e.stopPropagation()}
+		>
+			<h2 id="modal-eliminar-cliente-title" class="text-lg font-semibold text-slate-900 dark:text-white">
+				Eliminar cliente
+			</h2>
+			<p class="mt-2 text-sm text-slate-600 dark:text-neutral-400">
+				¿Seguro que desea eliminar este cliente? Esta acción no se puede deshacer.
+			</p>
+			<div class="mt-6 flex justify-end gap-2">
+				<button
+					type="button"
+					class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+					onclick={cancelDelete}
+					disabled={deleting}
+				>
+					Cancelar
+				</button>
+				<button
+					type="button"
+					class="rounded-lg border border-rose-400 bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-700 dark:border-rose-600 dark:bg-rose-700 dark:hover:bg-rose-800"
+					onclick={() => confirmDelete()}
+					disabled={deleting}
+				>
+					{deleting ? 'Eliminando…' : 'Eliminar'}
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}

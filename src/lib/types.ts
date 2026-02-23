@@ -93,11 +93,13 @@ export type OrderDraft = {
 	betweenStreetsSnapshot?: string;
 	/** ID del pedido BORRADOR en el repo (localStorage) */
 	orderId?: string;
+	/** Número de pedido para mostrar (ej. T1-2) cuando ya existe en el servidor */
+	orderDisplayNumber?: string;
 };
 
 export type Order = {
 	id: string;
-	/** Número secuencial de pedido (1, 2, 3...) para listados e impresión */
+	/** Número secuencial global (legacy); preferir display con shift: T{turnNumber}-{orderSequenceInShift} */
 	orderNumber: number;
 	createdAt: string;
 	hour: string;
@@ -118,7 +120,12 @@ export type Order = {
 	/** Usuario (team_members) que tomó el pedido */
 	createdByUserId?: string;
 	cashierNameSnapshot?: string;
+	/** Id del turno; si existe, el número de pedido se muestra como T{turnNumber}-{orderSequenceInShift} */
 	shiftId?: string;
+	/** Secuencia del pedido dentro del turno (1, 2, 3...) */
+	orderSequenceInShift?: number;
+	/** Número de turno (1, 2, 3...) denormalizado para mostrar T1, T2 */
+	shiftTurnNumber?: number;
 	items: OrderItem[];
 };
 
@@ -127,6 +134,8 @@ export type Shift = {
 	openedAt: string;
 	closedAt?: string;
 	turn: ShiftTurn;
+	/** Número de turno (1, 2, 3...) para mostrar T1, T2 y en número de pedido T1-1, T1-2... */
+	turnNumber: number;
 	cashierStaffId: string;
 	status: 'OPEN' | 'CLOSED';
 	totalsByPayment: Record<PaymentMethod, number>;

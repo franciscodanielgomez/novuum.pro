@@ -74,4 +74,19 @@ export const formatDateDDMMYYYY = (iso: string): string => {
 const ORDER_NUMBER_PAD = 6;
 export const formatOrderNumber = (n: number) => String(n).padStart(ORDER_NUMBER_PAD, '0');
 
+/** Número de pedido por turno: T1-1, T1-2, T2-1... Si el pedido no tiene turno, fallback a formatOrderNumber(orderNumber). */
+export function formatOrderDisplay(order: {
+	orderNumber: number;
+	shiftTurnNumber?: number;
+	orderSequenceInShift?: number;
+}): string {
+	if (
+		order.shiftTurnNumber != null &&
+		order.orderSequenceInShift != null
+	) {
+		return `T${order.shiftTurnNumber}-${order.orderSequenceInShift}`;
+	}
+	return formatOrderNumber(order.orderNumber);
+}
+
 export const isBrowser = () => browser;
