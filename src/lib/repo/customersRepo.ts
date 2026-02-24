@@ -45,15 +45,26 @@ export const customersRepo = {
 		const q = String(query ?? '').trim();
 		if (!q) return [];
 		const digits = q.replace(/\D/g, '');
-		if (digits.length >= 6) {
-			const byExact = await this.findByPhone(q, signal);
-			if (byExact) return [byExact];
-			if (digits !== q) {
-				const byDigits = await this.findByPhone(digits, signal);
-				if (byDigits) return [byDigits];
-			}
+
+		// Si hay 4+ dígitos: buscar todos los clientes cuyo teléfono contenga esa secuencia (p. ej. 44810780 muestra "44810780" y "01144810780")
+		if (digits.length >= 4) {
+			const phonePattern = `%${digits}%`;
+			const byPhoneContains = await dbSelect<Row[]>(
+				'customers',
+				({ signal: dbSignal, client }) =>
+					client
+						.from('customers')
+						.select('id, phone, address, between_streets, notes, created_at')
+						.ilike('phone', phonePattern)
+						.order('created_at', { ascending: false })
+						.limit(50)
+						.abortSignal(signal ?? dbSignal),
+				{ signal, source: 'customersRepo.search.phoneContains' }
+			);
+			if (byPhoneContains.length > 0) return byPhoneContains.map(rowToCustomer);
 		}
-		// Siempre hacer también búsqueda por texto (ilike): así "1128939337" encuentra teléfono "11 2893 9337" y "rocca" encuentra dirección
+
+		// Búsqueda por texto en dirección, entre calles, notas y teléfono (ilike)
 		const pattern = `%${q.replace(/"/g, '""')}%`;
 		const quoted = `"${pattern}"`;
 		const orFilter = `address.ilike.${quoted},between_streets.ilike.${quoted},notes.ilike.${quoted},phone.ilike.${quoted}`;

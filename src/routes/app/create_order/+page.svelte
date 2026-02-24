@@ -281,7 +281,7 @@
 	const removeDraft = async (draftId: string) => {
 		const draft = draftsStore.current.find((d) => d.id === draftId);
 		if (draft?.orderId) {
-			await ordersStore.updateStatus(draft.orderId, 'CANCELADO');
+			await ordersStore.delete(draft.orderId);
 		}
 		draftsStore.update((drafts) => {
 			const idx = drafts.findIndex((d) => d.id === draftId);
@@ -321,9 +321,23 @@
 				})
 			: []
 	);
-	const selectedCustomer = $derived(
-		activeDraft ? ($customersStore.find((c) => c.id === activeDraft.selectedCustomerId) ?? null) : null
-	);
+	/** Cliente seleccionado en el borrador activo: de la memoria o, si no está (ej. vino de la búsqueda por API), un fallback con los datos del draft para poder armar el pedido. */
+	const selectedCustomer = $derived.by(() => {
+		if (!activeDraft) return null;
+		const fromStore = $customersStore.find((c) => c.id === activeDraft.selectedCustomerId);
+		if (fromStore) return fromStore;
+		if (activeDraft.selectedCustomerId && (activeDraft.customerPhoneSnapshot ?? activeDraft.addressSnapshot)) {
+			return {
+				id: activeDraft.selectedCustomerId,
+				phone: activeDraft.customerPhoneSnapshot ?? '',
+				address: activeDraft.addressSnapshot ?? '',
+				betweenStreets: activeDraft.betweenStreetsSnapshot ?? undefined,
+				notes: undefined,
+				createdAt: activeDraft.createdAt
+			} as Customer;
+		}
+		return null;
+	});
 	const subtotal = $derived(activeDraft ? activeDraft.cart.reduce((acc, item) => acc + item.subtotal, 0) : 0);
 	const deliveryCost = $derived(activeDraft?.deliveryCost ?? 0);
 	const total = $derived(subtotal + deliveryCost);
@@ -370,13 +384,12 @@
 		if (!clientModalOpen) closeChooseAddress();
 	});
 
-	/** Si la lista filtrada está vacía y el usuario escribió 2+ caracteres, buscar por API (teléfono, dirección o texto) */
+	/** Búsqueda siempre en la base de datos: con 2+ caracteres se llama a la API y se muestran esos resultados (no la memoria). */
 	let lookupSearchTimeoutId: ReturnType<typeof setTimeout> | null = null;
 	$effect(() => {
 		if (!clientModalOpen || addClientMode) return;
 		const q = String(clientSearch ?? '').trim();
-		const noResults = filteredClients.length === 0;
-		if (!noResults || q.length < 2) {
+		if (q.length < 2) {
 			if (lookupSearchTimeoutId) clearTimeout(lookupSearchTimeoutId);
 			lookupSearchTimeoutId = null;
 			lookupSearchResults = [];
@@ -408,10 +421,16 @@
 		};
 	});
 
-	/** Lista a mostrar en el modal: la filtrada en memoria o los resultados de búsqueda por API si la lista está vacía */
-	const clientsToShow = $derived(
-		filteredClients.length > 0 ? filteredClients : lookupSearchResults
-	);
+	/** Lista a mostrar: con 2+ caracteres usamos siempre los resultados de la API (base de datos). Con menos, la lista en memoria. */
+	const clientsToShow = $derived.by(() => {
+		const q = String(clientSearch ?? '').trim();
+		if (q.length >= 2 && lookupSearchFor === q) return lookupSearchResults;
+		if (q.length < 2) {
+			const list = Array.isArray($customersStore) ? $customersStore : [];
+			return list;
+		}
+		return lookupSearchResults;
+	});
 
 	/** En formulario "Agregar cliente nuevo": si el teléfono tiene 6+ dígitos, comprobar por API si ya existe (aunque no esté en la lista) */
 	let existingLookupTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -1316,7 +1335,9 @@
 		let alive = true;
 		if (typeof document !== 'undefined' && import.meta.env.DEV) console.debug('[route:create_order] mount start');
 		const current = draftsStore.current;
-		const skipRestore = !!$page.url.searchParams.get('customerId');
+		// Solo restaurar drafts del storage cuando se abre un borrador por URL (draftId); al ir al POS o "agregar pedido" sin draftId no mostrar borradores viejos
+		const draftIdFromUrlParam = $page.url.searchParams.get('draftId');
+		const skipRestore = !draftIdFromUrlParam;
 		if (current.length === 0) {
 			const initial = getInitialDraftsFromStorage(skipRestore);
 			draftsStore.set(initial.drafts);
@@ -1351,16 +1372,21 @@
 				await loadSupabaseCatalog();
 				if (!alive) return;
 				await loadPaymentMethods();
-				// Si no hay drafts (p. ej. entró directo al POS), cargar pedidos BORRADOR del repo como cards
+				// Si no hay drafts (p. ej. entró directo al POS), cargar solo pedidos BORRADOR del turno actual como cards
 				if (draftsStore.current.length === 0 && !customerIdFromUrl) {
-					const allOrders = await api.orders.list();
-					const borradorOrders = allOrders.filter((o: Order) => o.status === 'BORRADOR');
-					if (borradorOrders.length > 0) {
-						const drafts = borradorOrders.map((o: Order, i: number) => orderToDraft(o, i));
-						draftsStore.set(drafts);
-						draftsList = drafts.slice();
-						activeDraftId = drafts[0].id;
-						draftCount = drafts.length;
+					const currentShiftId = get(sessionStore).shift?.id;
+					if (currentShiftId) {
+						const allOrders = await api.orders.list();
+						const borradorOrders = allOrders.filter(
+							(o: Order) => o.status === 'BORRADOR' && o.shiftId === currentShiftId
+						);
+						if (borradorOrders.length > 0) {
+							const drafts = borradorOrders.map((o: Order, i: number) => orderToDraft(o, i));
+							draftsStore.set(drafts);
+							draftsList = drafts.slice();
+							activeDraftId = drafts[0].id;
+							draftCount = drafts.length;
+						}
 					}
 				}
 				if (customerIdFromUrl) {

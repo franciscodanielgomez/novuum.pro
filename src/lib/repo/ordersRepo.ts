@@ -339,6 +339,24 @@ export const ordersRepo = {
 			({ signal, client, match }) => client.from('orders').delete().eq('id', match.id as string).abortSignal(signal),
 			{ source: 'ordersRepo.delete' }
 		);
+	},
+
+	/** Cantidad y suma total de pedidos realizados (NO_ASIGNADO, ASIGNADO, COMPLETADO; excluye BORRADOR y CANCELADO) para un turno. */
+	async getStatsByShiftId(shiftId: string, signal?: AbortSignal): Promise<{ count: number; total: number }> {
+		const rows = await dbSelect<{ total: number }[]>(
+			'orders',
+			({ signal: dbSignal, client }) =>
+				client
+					.from('orders')
+					.select('total')
+					.eq('shift_id', shiftId)
+					.in('status', ['NO_ASIGNADO', 'ASIGNADO', 'COMPLETADO'])
+					.abortSignal(signal ?? dbSignal),
+			{ signal, source: 'ordersRepo.getStatsByShiftId' }
+		);
+		const list = rows ?? [];
+		const total = list.reduce((sum, r) => sum + Number(r.total), 0);
+		return { count: list.length, total };
 	}
 };
 

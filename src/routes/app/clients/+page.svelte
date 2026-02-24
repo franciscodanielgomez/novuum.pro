@@ -208,11 +208,9 @@
 	const displayList = $derived.by(() => {
 		const list = Array.isArray($customersStore) ? $customersStore : [];
 		if (clientSearchBy === 'phone') {
-			return searchDigits.length < 4
-				? list
-				: filteredFromStore.length > 0
-					? filteredFromStore
-					: clientSearchResults;
+			// Con 4+ dígitos siempre usar resultados de la API (base de datos) para ver todos los que tienen ese número (44810780 y 01144810780).
+			if (searchDigits.length >= 4) return clientSearchResults;
+			return list;
 		}
 		if (clientSearchBy === 'address') {
 			return filteredByMainAddress;
@@ -246,12 +244,18 @@
 			);
 		});
 	});
+	const modalIsPhoneSearch = $derived.by(() => {
+		const q = String(modalClientSearch ?? '').trim();
+		const digits = q.replace(/\D/g, '');
+		return digits.length >= 4 && digits.length === q.length;
+	});
 	let modalLookupTimeoutId: ReturnType<typeof setTimeout> | null = null;
 	$effect(() => {
 		if (!browser || !newClientModalOpen || addClientMode) return;
 		const q = String(modalClientSearch ?? '').trim();
 		const noResults = modalFilteredClients.length === 0;
-		if (!noResults || q.length < 2) {
+		const useApi = noResults || modalIsPhoneSearch;
+		if (!useApi || q.length < 2) {
 			if (modalLookupTimeoutId) clearTimeout(modalLookupTimeoutId);
 			modalLookupTimeoutId = null;
 			modalLookupResults = [];
@@ -282,9 +286,10 @@
 			if (modalLookupTimeoutId) clearTimeout(modalLookupTimeoutId);
 		};
 	});
-	const modalClientsToShow = $derived(
-		modalFilteredClients.length > 0 ? modalFilteredClients : modalLookupResults
-	);
+	const modalClientsToShow = $derived.by(() => {
+		if (modalIsPhoneSearch && modalLookupFor === String(modalClientSearch ?? '').trim()) return modalLookupResults;
+		return modalFilteredClients.length > 0 ? modalFilteredClients : modalLookupResults;
+	});
 
 	// En formulario "Agregar cliente nuevo": si el teléfono tiene 6+ dígitos, comprobar por API si ya existe
 	let existingLookupTimeoutId: ReturnType<typeof setTimeout> | null = null;

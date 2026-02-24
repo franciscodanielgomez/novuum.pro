@@ -2,11 +2,13 @@
 	import { page } from '$app/stores';
 	import { dev } from '$app/environment';
 	import { goto } from '$app/navigation';
+	import { api } from '$lib/api';
 	import { desktopDownloadStore } from '$lib/desktop-download';
 	import { isTauri } from '$lib/printing/printer';
 import LogoNovuum from '$lib/components/LogoNovuum.svelte';
 import { businessStore } from '$lib/stores/business';
 	import { subscribeReturnToApp, runReturnToAppHandshake } from '$lib/app/returnToApp';
+	import { ordersStore } from '$lib/stores/orders';
 	import { sessionStore } from '$lib/stores/session';
 	import { shiftsStore } from '$lib/stores/shifts';
 	import { staffStore } from '$lib/stores/staff';
@@ -16,6 +18,7 @@ import { businessStore } from '$lib/stores/business';
 	import { uiStore } from '$lib/stores/uiStore';
 	import { updateStore } from '$lib/stores/updateStore';
 	import type { ShiftTurn } from '$lib/types';
+	import { formatMoney } from '$lib/utils';
 	import { onMount, tick } from 'svelte';
 	import { get } from 'svelte/store';
 
@@ -28,6 +31,15 @@ import { businessStore } from '$lib/stores/business';
 	let openShiftModalOpen = $state(false);
 	let noShiftModalOpen = $state(false);
 	let closeShiftModalOpen = $state(false);
+	let closeShiftStats = $state<{ count: number; total: number } | null>(null);
+	let closeShiftStatsLoading = $state(false);
+	/** Progreso al cerrar turno: eliminar borradores/cancelados, completar pendientes y cerrar. null = inactivo. */
+	let closeShiftProgress = $state<{
+		phase: 'deleting' | 'completing' | 'closing' | 'done';
+		total: number;
+		done: number;
+		error?: string;
+	} | null>(null);
 	let openShiftTurn: ShiftTurn = 'MAÑANA';
 	let openShiftCashierId = $state('');
 	let shiftElapsedSeconds = $state(0);
@@ -67,12 +79,73 @@ import { businessStore } from '$lib/stores/business';
 		toastsStore.success(`Turno T${created.turnNumber} abierto`);
 	}
 
-	function closeShiftFromHeader() {
+	async function confirmCloseShift() {
 		const shift = get(sessionStore).shift;
 		if (!shift) return;
-		shiftsStore.close(shift.id, shift.totalsByPayment, shift.total);
-		toastsStore.success('Turno cerrado');
+		closeShiftProgress = { phase: 'deleting', total: 0, done: 0 };
+		try {
+			const allOrders = await api.orders.list();
+			const toDelete = allOrders.filter(
+				(o: { shiftId?: string; status: string }) =>
+					o.shiftId === shift.id && (o.status === 'BORRADOR' || o.status === 'CANCELADO')
+			);
+			if (toDelete.length > 0) {
+				closeShiftProgress = { phase: 'deleting', total: toDelete.length, done: 0 };
+				for (const order of toDelete) {
+					await ordersStore.delete(order.id);
+					closeShiftProgress = {
+						...closeShiftProgress,
+						done: (closeShiftProgress?.done ?? 0) + 1
+					};
+				}
+			}
+			const toComplete = allOrders.filter(
+				(o: { shiftId?: string; status: string }) =>
+					o.shiftId === shift.id && (o.status === 'NO_ASIGNADO' || o.status === 'ASIGNADO')
+			);
+			if (toComplete.length > 0) {
+				closeShiftProgress = { phase: 'completing', total: toComplete.length, done: 0 };
+				for (const order of toComplete) {
+					await ordersStore.updateStatus(order.id, 'COMPLETADO');
+					closeShiftProgress = {
+						...closeShiftProgress,
+						done: (closeShiftProgress?.done ?? 0) + 1
+					};
+				}
+			}
+			closeShiftProgress = { phase: 'closing', total: 1, done: 0 };
+			await shiftsStore.close(shift.id, shift.totalsByPayment, shift.total);
+			closeShiftProgress = { phase: 'done', total: 1, done: 1 };
+			closeShiftModalOpen = false;
+			closeShiftProgress = null;
+			toastsStore.success('Turno cerrado');
+		} catch (e) {
+			const message = e instanceof Error ? e.message : 'Error al cerrar el turno';
+			closeShiftProgress = closeShiftProgress
+				? { ...closeShiftProgress, error: message }
+				: { phase: 'deleting', total: 0, done: 0, error: message };
+			toastsStore.error(message);
+		}
 	}
+
+	$effect(() => {
+		if (!closeShiftModalOpen) {
+			closeShiftStats = null;
+			closeShiftStatsLoading = false;
+			closeShiftProgress = null;
+			return;
+		}
+		const shift = get(sessionStore).shift;
+		if (!shift) return;
+		closeShiftStatsLoading = true;
+		closeShiftStats = null;
+		api.orders.getStatsByShiftId(shift.id).then((stats) => {
+			closeShiftStats = stats;
+			closeShiftStatsLoading = false;
+		}).catch(() => {
+			closeShiftStatsLoading = false;
+		});
+	});
 
 	$effect(() => {
 		if (avatarMenuOpen && avatarButtonRef) {
@@ -734,8 +807,11 @@ import { businessStore } from '$lib/stores/business';
 			role="dialog"
 			aria-modal="true"
 			aria-labelledby="modal-cerrar-turno-title"
-			onclick={(e) => e.target === e.currentTarget && (closeShiftModalOpen = false)}
-			onkeydown={(e) => e.key === 'Escape' && (closeShiftModalOpen = false)}
+			onclick={(e) => {
+				if (e.target !== e.currentTarget) return;
+				if (!closeShiftProgress) closeShiftModalOpen = false;
+			}}
+			onkeydown={(e) => e.key === 'Escape' && !closeShiftProgress && (closeShiftModalOpen = false)}
 		>
 			<div
 				class="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-neutral-700 dark:bg-neutral-900"
@@ -747,25 +823,85 @@ import { businessStore } from '$lib/stores/business';
 				<p class="mt-2 text-sm text-slate-600 dark:text-neutral-400">
 					En este turno se trabajaron <strong>{formatShiftHoursWorked(shiftElapsedSeconds)}</strong>. ¿Seguro que desea cerrar el turno?
 				</p>
-				<div class="mt-6 flex justify-end gap-2">
-					<button
-						type="button"
-						class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-						onclick={() => (closeShiftModalOpen = false)}
-					>
-						Cancelar
-					</button>
-					<button
-						type="button"
-						class="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-black dark:bg-white dark:text-black dark:hover:bg-neutral-200"
-						onclick={() => {
-							closeShiftModalOpen = false;
-							closeShiftFromHeader();
-						}}
-					>
-						Sí, cerrar turno
-					</button>
+				<div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-950/40">
+					<p class="text-sm font-medium text-amber-800 dark:text-amber-200">
+						Al cerrar el turno: se eliminarán los pedidos en <strong>Borrador</strong> y <strong>Cancelados</strong>. Los pedidos no asignados o asignados pasarán a estado <strong>Completado</strong>.
+					</p>
 				</div>
+				<div class="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-neutral-700 dark:bg-neutral-800">
+					<p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-neutral-400">Pedidos realizados</p>
+					<p class="text-xs text-slate-500 dark:text-neutral-500">(sin Borradores, ni Cancelados)</p>
+					{#if closeShiftStatsLoading}
+						<p class="mt-2 text-sm text-slate-600 dark:text-neutral-400">Cargando…</p>
+					{:else if closeShiftStats !== null}
+						<dl class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+							<dt class="text-slate-600 dark:text-neutral-400">Cantidad</dt>
+							<dd class="font-medium tabular-nums text-slate-900 dark:text-white">{closeShiftStats.count}</dd>
+							<dt class="text-slate-600 dark:text-neutral-400">Suma total</dt>
+							<dd class="font-medium tabular-nums text-slate-900 dark:text-white">{formatMoney(closeShiftStats.total)}</dd>
+						</dl>
+					{/if}
+				</div>
+				{#if closeShiftProgress}
+					<div class="mt-4 rounded-lg border border-slate-200 bg-slate-100 p-4 dark:border-neutral-700 dark:bg-neutral-800">
+						{#if closeShiftProgress.error}
+							<p class="text-sm font-medium text-red-600 dark:text-red-400">{closeShiftProgress.error}</p>
+							<div class="mt-3 flex justify-end">
+								<button
+									type="button"
+									class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200"
+									onclick={() => { closeShiftProgress = null; closeShiftModalOpen = false; }}
+								>
+									Cerrar
+								</button>
+							</div>
+						{:else if closeShiftProgress.phase === 'deleting'}
+							<p class="text-sm font-medium text-slate-700 dark:text-neutral-300">
+								Eliminando borradores y cancelados… {closeShiftProgress.done}/{closeShiftProgress.total}
+							</p>
+							<div class="mt-2 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-neutral-700">
+								<div
+									class="h-full rounded-full bg-slate-600 transition-all duration-300 dark:bg-neutral-400"
+									style="width: {closeShiftProgress.total > 0
+										? (100 * closeShiftProgress.done) / closeShiftProgress.total
+										: 0}%"
+								></div>
+							</div>
+						{:else if closeShiftProgress.phase === 'completing'}
+							<p class="text-sm font-medium text-slate-700 dark:text-neutral-300">
+								Pasando pedidos a Completado… {closeShiftProgress.done}/{closeShiftProgress.total}
+							</p>
+							<div class="mt-2 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-neutral-700">
+								<div
+									class="h-full rounded-full bg-slate-600 transition-all duration-300 dark:bg-neutral-400"
+									style="width: {closeShiftProgress.total > 0
+										? (100 * closeShiftProgress.done) / closeShiftProgress.total
+										: 0}%"
+								></div>
+							</div>
+						{:else if closeShiftProgress.phase === 'closing'}
+							<p class="text-sm font-medium text-slate-700 dark:text-neutral-300">Cerrando turno…</p>
+							<div class="mt-2 h-2 animate-pulse rounded-full bg-slate-300 dark:bg-neutral-600"></div>
+						{/if}
+					</div>
+				{:else}
+					<div class="mt-6 flex justify-end gap-2">
+						<button
+							type="button"
+							class="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-neutral-600 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+							onclick={() => (closeShiftModalOpen = false)}
+						>
+							Cancelar
+						</button>
+						<button
+							type="button"
+							class="rounded-lg bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-black dark:bg-white dark:text-black dark:hover:bg-neutral-200"
+							onclick={() => confirmCloseShift()}
+						>
+							Sí, cerrar turno
+						</button>
+					</div>
+				{/if}
 			</div>
 		</div>
 	{/if}

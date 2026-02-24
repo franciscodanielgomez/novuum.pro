@@ -40,7 +40,8 @@ export const api = {
 		assign: (id: string, staffId: string) => ordersRepo.assign(id, staffId),
 		assignGuest: (id: string, staffGuestId: string) => ordersRepo.assignGuest(id, staffGuestId),
 		unassign: (id: string) => ordersRepo.unassign(id),
-		delete: (id: string) => ordersRepo.delete(id)
+		delete: (id: string) => ordersRepo.delete(id),
+		getStatsByShiftId: (shiftId: string, signal?: AbortSignal) => ordersRepo.getStatsByShiftId(shiftId, signal)
 	},
 	shifts: {
 		list: () => shiftsRepo.list(),
