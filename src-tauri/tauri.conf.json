@@ -1,6 +1,6 @@
 {
   "productName": "Novuum",
-  "version": "0.1.0",
+  "version": "0.1.38",
   "identifier": "com.novum.pos",
   "build": {
     "beforeDevCommand": "npm run dev",
