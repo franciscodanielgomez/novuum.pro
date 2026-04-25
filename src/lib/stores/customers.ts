@@ -87,11 +87,7 @@ export const customersStore = {
 		return created;
 	},
 	createMany: async (payloads: Omit<Customer, 'id' | 'createdAt'>[]): Promise<Customer[]> => {
-		const created: Customer[] = [];
-		for (const payload of payloads) {
-			const c = await api.customers.create(payload);
-			created.push(c);
-		}
+		const created = await api.customers.createMany(payloads);
 		await customersStore.revalidate();
 		return created;
 	},

@@ -22,7 +22,13 @@ function rowToCustomer(row: Row): Customer {
 	};
 }
 
+const LIST_LIMIT = 500;
+
 export const customersRepo = {
+	/**
+	 * Trae los {@link LIST_LIMIT} clientes más recientes. Para clientes fuera de ese
+	 * rango usar {@link search} o {@link findByPhone}.
+	 */
 	async list(signal?: AbortSignal): Promise<Customer[]> {
 		const data = await dbSelect<Row[]>(
 			'customers',
@@ -31,6 +37,7 @@ export const customersRepo = {
 					.from('customers')
 					.select('id, phone, address, between_streets, notes, created_at')
 					.order('created_at', { ascending: false })
+					.limit(LIST_LIMIT)
 					.abortSignal(signal ?? dbSignal),
 			{ signal, source: 'customersRepo.list' }
 		);
@@ -132,6 +139,42 @@ export const customersRepo = {
 		);
 		const row = Array.isArray(data) ? data[0] : null;
 		return row ? rowToCustomer(row) : null;
+	},
+
+	/**
+	 * Inserción en bulk. En 409 (alguno ya existía) reintenta uno por uno
+	 * para reusar el `findByPhone` fallback de `create`. Devuelve los creados o existentes.
+	 */
+	async createMany(payloads: Omit<Customer, 'id' | 'createdAt'>[]): Promise<Customer[]> {
+		if (payloads.length === 0) return [];
+		try {
+			const rows = payloads.map((p) => ({
+				phone: p.phone,
+				address: p.address,
+				between_streets: p.betweenStreets?.trim() || null,
+				notes: p.notes?.trim() || null
+			}));
+			const data = await dbInsert<Row[]>(
+				'customers',
+				rows,
+				({ signal, client, payload }) =>
+					client
+						.from('customers')
+						.insert(payload)
+						.select('id, phone, address, between_streets, notes, created_at')
+						.abortSignal(signal),
+				{ source: 'customersRepo.createMany' }
+			);
+			return (data ?? []).map(rowToCustomer);
+		} catch (e) {
+			const isConflict =
+				e instanceof AppError &&
+				(e.status === 409 || e.code === '23505' || (e.cause as { code?: string })?.code === '23505');
+			if (!isConflict) throw e;
+			const out: Customer[] = [];
+			for (const p of payloads) out.push(await this.create(p));
+			return out;
+		}
 	},
 
 	async create(payload: Omit<Customer, 'id' | 'createdAt'>): Promise<Customer> {

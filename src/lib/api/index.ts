@@ -5,7 +5,7 @@ import { customerAddressesRepo } from '$lib/repo/customerAddressesRepo';
 import { customersRepo } from '$lib/repo/customersRepo';
 import { categoriesRepo } from '$lib/repo/categoriesRepo';
 import { groupsRepo } from '$lib/repo/groupsRepo';
-import { ordersRepo } from '$lib/repo/ordersRepo';
+import { ordersRepo, type OrdersListOptions } from '$lib/repo/ordersRepo';
 import { productsRepo } from '$lib/repo/productsRepo';
 import { paymentMethodsRepo } from '$lib/repo/paymentMethodsRepo';
 import { shiftsRepo } from '$lib/repo/shiftsRepo';
@@ -32,7 +32,7 @@ export const api = {
 	products: productsRepo,
 	paymentMethods: paymentMethodsRepo,
 	orders: {
-		list: (signal?: AbortSignal) => ordersRepo.list(signal),
+		list: (optionsOrSignal?: OrdersListOptions | AbortSignal) => ordersRepo.list(optionsOrSignal),
 		get: (id: string) => ordersRepo.get(id),
 		create: (payload: Omit<Order, 'id' | 'orderNumber' | 'createdAt' | 'hour'>) => ordersRepo.create(payload),
 		update: (id: string, payload: Partial<Order>) => ordersRepo.update(id, payload),
@@ -41,6 +41,8 @@ export const api = {
 		assignGuest: (id: string, staffGuestId: string) => ordersRepo.assignGuest(id, staffGuestId),
 		unassign: (id: string) => ordersRepo.unassign(id),
 		delete: (id: string) => ordersRepo.delete(id),
+		bulkDeleteByIds: (ids: string[]) => ordersRepo.bulkDeleteByIds(ids),
+		bulkUpdateStatusByIds: (ids: string[], status: OrderStatus) => ordersRepo.bulkUpdateStatusByIds(ids, status),
 		getStatsByShiftId: (shiftId: string, signal?: AbortSignal) => ordersRepo.getStatsByShiftId(shiftId, signal)
 	},
 	shifts: {

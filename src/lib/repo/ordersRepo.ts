@@ -30,6 +30,11 @@ type OrderRow = {
 const ORDER_COLUMNS =
 	'id, order_number, customer_id, customer_phone_snapshot, address_snapshot, between_streets_snapshot, status, assigned_staff_id, assigned_staff_guest_id, payment_method, cash_received, change_due, notes, delivery_cost, total, created_by_user_id, cashier_name_snapshot, created_at, updated_at, shift_id, sequence_in_shift, shift_turn_number';
 
+const ORDER_ITEM_COLUMNS =
+	'id, order_id, product_id, name_snapshot, qty, unit_price, subtotal, notes';
+
+const ORDER_WITH_ITEMS_SELECT = `${ORDER_COLUMNS}, order_items(${ORDER_ITEM_COLUMNS})`;
+
 type OrderItemRow = {
 	id: string;
 	order_id: string;
@@ -40,6 +45,8 @@ type OrderItemRow = {
 	subtotal: number;
 	notes: string | null;
 };
+
+type OrderRowWithItems = OrderRow & { order_items: OrderItemRow[] };
 
 function formatHour(iso: string): string {
 	return new Date(iso).toLocaleTimeString('es-AR', {
@@ -90,60 +97,65 @@ function itemRowToOrderItem(row: OrderItemRow): OrderItem {
 	};
 }
 
-async function fetchItemsForOrderIds(orderIds: string[]): Promise<Map<string, OrderItem[]>> {
-	if (orderIds.length === 0) return new Map();
-	const data = await dbSelect<OrderItemRow[]>(
-		'order_items',
-		({ signal, client }) =>
-			client
-				.from('order_items')
-				.select('id, order_id, product_id, name_snapshot, qty, unit_price, subtotal, notes')
-				.in('order_id', orderIds)
-				.order('id', { ascending: true })
-				.abortSignal(signal),
-		{ source: 'ordersRepo.fetchItemsForOrderIds' }
-	);
-	const map = new Map<string, OrderItem[]>();
-	for (const row of data ?? []) {
-		const list = map.get(row.order_id) ?? [];
-		list.push(itemRowToOrderItem(row));
-		map.set(row.order_id, list);
-	}
-	return map;
+function extractItems(row: OrderRowWithItems): OrderItem[] {
+	const items = (row.order_items ?? [])
+		.slice()
+		.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+	return items.map(itemRowToOrderItem);
 }
 
+const DEFAULT_LIST_WINDOW_DAYS = 30;
+
+export type OrdersListOptions = {
+	signal?: AbortSignal;
+	shiftId?: string;
+	since?: Date;
+	sinceDays?: number;
+};
+
 export const ordersRepo = {
-	async list(signal?: AbortSignal): Promise<Order[]> {
-		const rows = await dbSelect<OrderRow[]>(
+	async list(optionsOrSignal?: OrdersListOptions | AbortSignal): Promise<Order[]> {
+		const opts: OrdersListOptions =
+			optionsOrSignal instanceof AbortSignal
+				? { signal: optionsOrSignal }
+				: (optionsOrSignal ?? {});
+		const { signal, shiftId } = opts;
+		const sinceDate =
+			opts.since ??
+			(shiftId
+				? null
+				: new Date(Date.now() - (opts.sinceDays ?? DEFAULT_LIST_WINDOW_DAYS) * 24 * 60 * 60 * 1000));
+
+		const rows = await dbSelect<OrderRowWithItems[]>(
 			'orders',
-			({ signal: dbSignal, client }) =>
-				client
+			({ signal: dbSignal, client }) => {
+				let q = client
 					.from('orders')
-					.select(ORDER_COLUMNS)
-					.order('created_at', { ascending: false })
-					.abortSignal(signal ?? dbSignal),
+					.select(ORDER_WITH_ITEMS_SELECT)
+					.order('created_at', { ascending: false });
+				if (shiftId) q = q.eq('shift_id', shiftId);
+				if (sinceDate) q = q.gte('created_at', sinceDate.toISOString());
+				return q.abortSignal(signal ?? dbSignal);
+			},
 			{ signal, source: 'ordersRepo.list' }
 		);
-		const ids = (rows ?? []).map((r) => r.id);
-		const itemsByOrder = await fetchItemsForOrderIds(ids);
-		return (rows ?? []).map((r) => rowToOrder(r, itemsByOrder.get(r.id) ?? []));
+		return (rows ?? []).map((r) => rowToOrder(r, extractItems(r)));
 	},
 
 	async get(id: string): Promise<Order | null> {
-		const row = await dbSelect<OrderRow | null>(
+		const row = await dbSelect<OrderRowWithItems | null>(
 			'orders',
 			({ signal, client }) =>
 				client
 					.from('orders')
-					.select(ORDER_COLUMNS)
+					.select(ORDER_WITH_ITEMS_SELECT)
 					.eq('id', id)
 					.abortSignal(signal)
 					.maybeSingle(),
 			{ source: 'ordersRepo.get' }
 		);
 		if (!row) return null;
-		const itemsMap = await fetchItemsForOrderIds([id]);
-		return rowToOrder(row, itemsMap.get(id) ?? []);
+		return rowToOrder(row, extractItems(row));
 	},
 
 	async create(payload: Omit<Order, 'id' | 'orderNumber' | 'createdAt' | 'hour'>): Promise<Order> {
@@ -192,6 +204,7 @@ export const ordersRepo = {
 			{ source: 'ordersRepo.create' }
 		);
 
+		let insertedItems: OrderItemRow[] = [];
 		if (payload.items?.length) {
 			const itemRows = payload.items.map((item) => ({
 				order_id: orderRow.id,
@@ -202,16 +215,20 @@ export const ordersRepo = {
 				subtotal: item.subtotal,
 				notes: item.notes?.trim() || null
 			}));
-			await dbInsert(
+			insertedItems = await dbInsert<OrderItemRow[]>(
 				'order_items',
 				itemRows,
-				({ signal, client, payload }) => client.from('order_items').insert(payload).abortSignal(signal),
+				({ signal, client, payload }) =>
+					client.from('order_items').insert(payload).select(ORDER_ITEM_COLUMNS).abortSignal(signal),
 				{ source: 'ordersRepo.createItems' }
-			);
+			) ?? [];
 		}
 
-		const itemsMap = await fetchItemsForOrderIds([orderRow.id]);
-		return rowToOrder(orderRow, itemsMap.get(orderRow.id) ?? []);
+		const items = insertedItems
+			.slice()
+			.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+			.map(itemRowToOrderItem);
+		return rowToOrder(orderRow, items);
 	},
 
 	async update(id: string, payload: Partial<Order>): Promise<Order | null> {
@@ -338,6 +355,32 @@ export const ordersRepo = {
 			{ id },
 			({ signal, client, match }) => client.from('orders').delete().eq('id', match.id as string).abortSignal(signal),
 			{ source: 'ordersRepo.delete' }
+		);
+	},
+
+	/**
+	 * Borrado bulk por ids. Pensado para cierre de turno.
+	 * `order_items` se borra automáticamente por `on delete cascade`.
+	 */
+	async bulkDeleteByIds(ids: string[]): Promise<void> {
+		if (ids.length === 0) return;
+		await dbDelete(
+			'orders',
+			{},
+			({ signal, client }) => client.from('orders').delete().in('id', ids).abortSignal(signal),
+			{ source: 'ordersRepo.bulkDeleteByIds' }
+		);
+	},
+
+	/** Update bulk de status por ids. Pensado para cierre de turno (completar pendientes). */
+	async bulkUpdateStatusByIds(ids: string[], status: OrderStatus): Promise<void> {
+		if (ids.length === 0) return;
+		await dbUpdate(
+			'orders',
+			{ status },
+			{},
+			({ signal, client, payload }) => client.from('orders').update(payload).in('id', ids).abortSignal(signal),
+			{ source: 'ordersRepo.bulkUpdateStatusByIds' }
 		);
 	},
 

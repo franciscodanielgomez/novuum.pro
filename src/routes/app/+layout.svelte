@@ -84,34 +84,23 @@ import { businessStore } from '$lib/stores/business';
 		if (!shift) return;
 		closeShiftProgress = { phase: 'deleting', total: 0, done: 0 };
 		try {
-			const allOrders = await api.orders.list();
-			const toDelete = allOrders.filter(
-				(o: { shiftId?: string; status: string }) =>
-					o.shiftId === shift.id && (o.status === 'BORRADOR' || o.status === 'CANCELADO')
-			);
-			if (toDelete.length > 0) {
-				closeShiftProgress = { phase: 'deleting', total: toDelete.length, done: 0 };
-				for (const order of toDelete) {
-					await ordersStore.delete(order.id);
-					closeShiftProgress = {
-						...closeShiftProgress,
-						done: (closeShiftProgress?.done ?? 0) + 1
-					};
-				}
+			const shiftOrders = await api.orders.list({ shiftId: shift.id });
+			const toDeleteIds = shiftOrders
+				.filter((o: { status: string }) => o.status === 'BORRADOR' || o.status === 'CANCELADO')
+				.map((o: { id: string }) => o.id);
+			const toCompleteIds = shiftOrders
+				.filter((o: { status: string }) => o.status === 'NO_ASIGNADO' || o.status === 'ASIGNADO')
+				.map((o: { id: string }) => o.id);
+
+			if (toDeleteIds.length > 0) {
+				closeShiftProgress = { phase: 'deleting', total: toDeleteIds.length, done: 0 };
+				await api.orders.bulkDeleteByIds(toDeleteIds);
+				closeShiftProgress = { phase: 'deleting', total: toDeleteIds.length, done: toDeleteIds.length };
 			}
-			const toComplete = allOrders.filter(
-				(o: { shiftId?: string; status: string }) =>
-					o.shiftId === shift.id && (o.status === 'NO_ASIGNADO' || o.status === 'ASIGNADO')
-			);
-			if (toComplete.length > 0) {
-				closeShiftProgress = { phase: 'completing', total: toComplete.length, done: 0 };
-				for (const order of toComplete) {
-					await ordersStore.updateStatus(order.id, 'COMPLETADO');
-					closeShiftProgress = {
-						...closeShiftProgress,
-						done: (closeShiftProgress?.done ?? 0) + 1
-					};
-				}
+			if (toCompleteIds.length > 0) {
+				closeShiftProgress = { phase: 'completing', total: toCompleteIds.length, done: 0 };
+				await api.orders.bulkUpdateStatusByIds(toCompleteIds, 'COMPLETADO');
+				closeShiftProgress = { phase: 'completing', total: toCompleteIds.length, done: toCompleteIds.length };
 			}
 			closeShiftProgress = { phase: 'closing', total: 1, done: 0 };
 			await shiftsStore.close(shift.id, shift.totalsByPayment, shift.total);
@@ -119,6 +108,7 @@ import { businessStore } from '$lib/stores/business';
 			closeShiftModalOpen = false;
 			closeShiftProgress = null;
 			toastsStore.success('Turno cerrado');
+			void ordersStore.revalidate();
 		} catch (e) {
 			const message = e instanceof Error ? e.message : 'Error al cerrar el turno';
 			closeShiftProgress = closeShiftProgress
@@ -149,7 +139,8 @@ import { businessStore } from '$lib/stores/business';
 
 	$effect(() => {
 		if (avatarMenuOpen && avatarButtonRef) {
-			// Recalcular posición después de que el dropdown esté en el DOM
+			// Recalcular posición después de que el dropdown esté en el DOM.
+			// Alineamos al borde izquierdo del avatar; el wrapper ya tiene p-4 del parent.
 			tick().then(() => {
 				if (!avatarButtonRef) return;
 				const rect = avatarButtonRef.getBoundingClientRect();
@@ -611,7 +602,7 @@ import { businessStore } from '$lib/stores/business';
 			{#if avatarMenuOpen}
 				<div
 					data-avatar-dropdown
-					class="fixed z-50 w-56 rounded-lg border border-slate-200 bg-white p-1 shadow-lg dark:border-neutral-700 dark:bg-black"
+					class="fixed z-50 w-44 rounded-lg border border-slate-200 bg-white p-1 shadow-lg dark:border-neutral-700 dark:bg-black"
 					style="bottom: {avatarDropdownStyle.bottom}; left: {avatarDropdownStyle.left};"
 				>
 					<button
@@ -669,7 +660,7 @@ import { businessStore } from '$lib/stores/business';
 							rel="noopener noreferrer"
 							class="block rounded-md px-3 py-2 text-left text-sm text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-950/40"
 						>
-							{$desktopDownloadStore.loading ? 'Cargando…' : 'Descargar versión Desktop'}
+							{$desktopDownloadStore.loading ? 'Cargando…' : 'Descargar'}
 						</a>
 					{/if}
 					<button
