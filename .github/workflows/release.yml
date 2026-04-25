@@ -1,11 +1,13 @@
-# Release automático: al pushear un tag vX.Y.Z se construye el MSI en Windows,
-# se crea/actualiza el GitHub Release y se suben .msi, .msi.sig y latest.json (updater).
+# Release automático: cada push a main bumpea la versión patch, construye el MSI en Windows,
+# crea un tag vX.Y.Z y publica el GitHub Release con .msi, .msi.sig y latest.json (updater).
+# Para saltar un release puntual, agregar "[skip ci]" al commit message.
 name: Release Tauri (Windows MSI)
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -13,9 +15,46 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
+    # Defensa adicional: GITHUB_TOKEN ya no re-dispara workflows, pero por si alguien
+    # pushea un cambio que no debería triggerear release, soportamos el marcador estándar.
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Bump patch version
+        id: bump
+        shell: pwsh
+        run: |
+          $conf = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $current = $conf.version
+          $parts = $current.Split('.')
+          $newPatch = [int]$parts[2] + 1
+          $newVersion = "$($parts[0]).$($parts[1]).$newPatch"
+          $tag = "v$newVersion"
+          Write-Host "Bumping $current -> $newVersion (tag: $tag)"
+
+          # tauri.conf.json: reemplazo literal del par "version": "X.Y.Z"
+          $text = Get-Content src-tauri/tauri.conf.json -Raw
+          $text = $text.Replace("`"version`": `"$current`"", "`"version`": `"$newVersion`"")
+          [System.IO.File]::WriteAllText("$PWD/src-tauri/tauri.conf.json", $text)
+
+          # Cargo.toml: la línea `version = "X.Y.Z"` solo aparece para el package "novum"
+          $text = Get-Content src-tauri/Cargo.toml -Raw
+          $text = $text.Replace("version = `"$current`"", "version = `"$newVersion`"")
+          [System.IO.File]::WriteAllText("$PWD/src-tauri/Cargo.toml", $text)
+
+          # Cargo.lock: solo el bloque de novum, identificado por el name justo antes
+          $text = Get-Content src-tauri/Cargo.lock -Raw
+          $pattern = '(\[\[package\]\]\r?\nname = "novum"\r?\nversion = )"[^"]+"'
+          $replacement = '$1"' + $newVersion + '"'
+          $text = $text -replace $pattern, $replacement
+          [System.IO.File]::WriteAllText("$PWD/src-tauri/Cargo.lock", $text)
+
+          echo "version=$newVersion" >> $env:GITHUB_OUTPUT
+          echo "tag=$tag" >> $env:GITHUB_OUTPUT
 
       - name: Verificar secreto de firma (TAURI_PRIVATE_KEY)
         run: |
@@ -70,15 +109,17 @@ jobs:
 
       - name: Generate latest.json for updater
         id: updater
+        shell: pwsh
         run: |
-          $version = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          $version = "${{ steps.bump.outputs.version }}"
+          $tag = "${{ steps.bump.outputs.tag }}"
           $msiDir = "src-tauri/target/release/bundle/msi"
           $msi = Get-ChildItem -Path $msiDir -Filter "*.msi" | Select-Object -First 1
           if (-not $msi) { Write-Error "No .msi found in $msiDir"; exit 1 }
           $sigPath = "$($msi.FullName).sig"
           if (-not (Test-Path $sigPath)) { Write-Error "No .sig found for $($msi.Name)"; exit 1 }
           $signature = Get-Content $sigPath -Raw
-          $baseUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
+          $baseUrl = "https://github.com/${{ github.repository }}/releases/download/$tag"
           $msiNameEncoded = [System.Uri]::EscapeDataString($msi.Name)
           $url = "$baseUrl/$msiNameEncoded"
           $json = @{
@@ -94,13 +135,23 @@ jobs:
           } | ConvertTo-Json -Depth 4 -Compress
           $json | Set-Content -Path "$msiDir/latest.json" -Encoding utf8NoBOM
           echo "msi_name=$($msi.Name)" >> $env:GITHUB_OUTPUT
-          echo "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Commit version bump and create tag
+        shell: pwsh
+        run: |
+          git config user.email "fdgomez94@gmail.com"
+          git config user.name "Francisco Daniel Gomez"
+          git add src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+          git commit -m "chore: bump version to ${{ steps.bump.outputs.version }} [skip ci]"
+          git push origin HEAD:main
+          git tag ${{ steps.bump.outputs.tag }}
+          git push origin ${{ steps.bump.outputs.tag }}
 
       - name: Create Release and upload assets
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          tag_name: ${{ steps.bump.outputs.tag }}
+          name: ${{ steps.bump.outputs.tag }}
           body: |
             Instalador Windows (MSI) para Novum POS.
             Descargar el archivo `.msi` y ejecutarlo para instalar.
